@@ -181,12 +181,13 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			return false;
 		}
 
-		while ( time() < $deadline ) {
+		$now = time();
+		while ( $now < $deadline ) {
 			// Try to insert a new lock
 			$result = $insert_stmt->execute( [
 				':session_id' => $session_id,
 				':lock_token' => $this->lock_token,
-				':locked_at' => time(),
+				':locked_at' => $now,
 			] );
 
 			if ( $result === true ) {
@@ -202,7 +203,6 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			}
 
 			// Lock exists - check if it's stale
-			$now = time();
 			$result = $update_stmt->execute( [
 				':lock_token' => $this->lock_token,
 				':locked_at' => $now,
@@ -221,6 +221,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 
 			// Lock is held by someone else and not stale, wait and retry
 			usleep( $this->lock_retry_interval * 1000 );
+			$now = time();
 		}
 
 		// Timeout reached
