@@ -322,20 +322,22 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			return false;
 		}
 
-		// Also clean up any lock for this session
-		$stmt = $this->pdo->prepare(
-			"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id"
-		);
-		if ( $stmt === false ) {
-			return false;
-		}
+		// Only delete the lock if we own it (have the matching lock_token)
+		// This prevents destroying another process's lock, which could cause race conditions
+		// If we don't own the lock, leave it - the owner will release it or GC will clean it up
+		if ( $this->session_id === $id && $this->lock_token !== '' ) {
+			$stmt = $this->pdo->prepare(
+				"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id AND lock_token = :lock_token"
+			);
+			if ( $stmt === false ) {
+				return false;
+			}
 
-		$stmt->execute( [
-			':session_id' => $id,
-		] );
+			$stmt->execute( [
+				':session_id' => $id,
+				':lock_token' => $this->lock_token,
+			] );
 
-		// Clear our internal tracking if we destroyed the session we were holding
-		if ( $this->session_id === $id ) {
 			$this->session_id = null;
 			$this->lock_token = '';
 		}

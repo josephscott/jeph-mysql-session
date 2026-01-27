@@ -113,28 +113,131 @@ describe( 'Session Locking', function() {
 		expect( $elapsed )->toBeGreaterThanOrEqual( 1 );
 	} );
 
-	test( 'destroy cleans up lock', function() {
-		$session_id = 'destroy_lock_test';
+	test( 'destroy cleans up our own lock', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
 
-		// Insert a lock
+		$session_id = 'destroy_own_lock_test';
+
+		// Read to acquire lock
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'test_data' );
+
+		// Verify lock exists
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Destroy our own session - should clean up our lock
+		$session->destroy( id: $session_id );
+
+		// Verify lock is gone
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Verify session data is gone
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+
+	test( 'destroy does not delete another process lock', function() {
+		$session_id = 'destroy_other_lock_test';
+
+		// Simulate another process holding a lock
 		$stmt = $this->pdo->prepare(
 			'INSERT INTO session_locks (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)'
 		);
 		$stmt->execute( [
 			':session_id' => $session_id,
-			':lock_token' => 'orphaned_lock',
+			':lock_token' => 'another_process_token',
 			':locked_at' => time(),
 		] );
 
-		// Destroy should clean it up
+		// Also create some session data
+		$stmt = $this->pdo->prepare(
+			'INSERT INTO sessions (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed)'
+		);
+		$stmt->execute( [
+			':session_id' => $session_id,
+			':data' => 'some_data',
+			':last_accessed' => time(),
+		] );
+
+		// A different session instance (not holding this lock) tries to destroy
 		$session = Session::create( pdo: $this->pdo );
 		$session->destroy( id: $session_id );
 
+		// Session data should be deleted
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// But the other process's lock should still exist
 		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
 		$stmt->execute( [ ':session_id' => $session_id ] );
 		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
 
+		// Clean up manually for other tests
+		$this->pdo->exec( "DELETE FROM session_locks WHERE session_id = '{$session_id}'" );
+	} );
+
+	test( 'destroy with different session does not affect other locks', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		// We hold a lock on session A
+		$session_a = 'session_a_lock_test';
+		$session->read( id: $session_a );
+
+		// Another process holds a lock on session B
+		$session_b = 'session_b_lock_test';
+		$stmt = $this->pdo->prepare(
+			'INSERT INTO session_locks (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)'
+		);
+		$stmt->execute( [
+			':session_id' => $session_b,
+			':lock_token' => 'other_process_token',
+			':locked_at' => time(),
+		] );
+		$stmt = $this->pdo->prepare(
+			'INSERT INTO sessions (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed)'
+		);
+		$stmt->execute( [
+			':session_id' => $session_b,
+			':data' => 'session_b_data',
+			':last_accessed' => time(),
+		] );
+
+		// We destroy session B (which we don't own)
+		$session->destroy( id: $session_b );
+
+		// Session B data should be gone
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_b ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
 		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Session B lock should still exist (we didn't own it)
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_b ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Our lock on session A should still exist
+		$stmt->execute( [ ':session_id' => $session_a ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		$session->close();
+
+		// Clean up session B lock manually
+		$this->pdo->exec( "DELETE FROM session_locks WHERE session_id = '{$session_b}'" );
 	} );
 
 	test( 'gc cleans up stale locks', function() {
