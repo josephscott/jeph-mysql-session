@@ -167,6 +167,19 @@ class Session implements \SessionHandlerInterface {
 	}
 
 	public function write( string $id, string $data ): bool {
+		// Check if we need to acquire a lock for this session ID
+		// This handles session_regenerate_id() which writes to a new ID
+		if ( $this->session_id !== $id ) {
+			// Release old lock if we have one
+			$this->release_lock();
+
+			// Acquire lock for new session ID
+			$lock_acquired = $this->acquire_lock( $id );
+			if ( $lock_acquired === false ) {
+				return false;
+			}
+		}
+
 		$now = time();
 
 		$stmt = $this->pdo->prepare(
@@ -214,6 +227,12 @@ class Session implements \SessionHandlerInterface {
 		$stmt->execute( [
 			':session_id' => $id,
 		] );
+
+		// Clear our internal tracking if we destroyed the session we were holding
+		if ( $this->session_id === $id ) {
+			$this->session_id = null;
+			$this->lock_token = '';
+		}
 
 		return true;
 	}

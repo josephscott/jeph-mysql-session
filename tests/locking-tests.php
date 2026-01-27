@@ -240,3 +240,129 @@ describe( 'Concurrent Session Locking', function() {
 		$session->close();
 	} );
 } );
+
+describe( 'Session Regenerate ID', function() {
+	test( 'write to new session ID acquires lock', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$old_id = 'old_session_id';
+		$new_id = 'new_session_id';
+
+		// Read with old ID (acquires lock on old ID)
+		$session->read( id: $old_id );
+
+		// Verify lock on old ID
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $old_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Write to new ID (simulates session_regenerate_id behavior)
+		$result = $session->write( id: $new_id, data: 'test_data' );
+		expect( $result )->toBeTrue();
+
+		// Verify old lock is released
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $old_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Verify new lock is acquired
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Verify data was written
+		$stmt = $this->pdo->prepare( 'SELECT data FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( $row['data'] )->toBe( 'test_data' );
+
+		$session->close();
+	} );
+
+	test( 'destroy then write simulates session_regenerate_id with delete', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$old_id = 'old_session_to_destroy';
+		$new_id = 'new_regenerated_session';
+
+		// Read and write to old session
+		$session->read( id: $old_id );
+		$session->write( id: $old_id, data: 'old_data' );
+
+		// Verify old session exists
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $old_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Destroy old session (simulates session_regenerate_id(true))
+		$session->destroy( id: $old_id );
+
+		// Verify old session and lock are gone
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $old_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $old_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Write to new session ID
+		$result = $session->write( id: $new_id, data: 'new_data' );
+		expect( $result )->toBeTrue();
+
+		// Verify new session has lock and data
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		$stmt = $this->pdo->prepare( 'SELECT data FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( $row['data'] )->toBe( 'new_data' );
+
+		$session->close();
+	} );
+
+	test( 'close releases lock on new session ID after regenerate', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$old_id = 'session_before_regenerate';
+		$new_id = 'session_after_regenerate';
+
+		// Read old, destroy old, write new (full regenerate flow)
+		$session->read( id: $old_id );
+		$session->destroy( id: $old_id );
+		$session->write( id: $new_id, data: 'regenerated_data' );
+
+		// Verify new lock exists before close
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Close should release the new lock
+		$session->close();
+
+		// Verify new lock is released
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Verify data persists
+		$stmt = $this->pdo->prepare( 'SELECT data FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $new_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( $row['data'] )->toBe( 'regenerated_data' );
+	} );
+} );
