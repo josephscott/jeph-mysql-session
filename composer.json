@@ -9,6 +9,11 @@
 		"josephscott/phpcsfixer-config": "^0.0.6",
 		"phpstan/phpstan": "^2.1"
 	},
+	"autoload": {
+		"classmap": [
+			"src/jeph/mysql/session.php"
+		]
+	},
 	"config": {
 		"classmap-authoritative": true,
 		"optimize-autoloader": true,
