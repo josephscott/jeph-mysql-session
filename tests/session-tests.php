@@ -141,4 +141,56 @@ describe( 'Session Handler', function() {
 
 		expect( (int) $row['cnt'] )->toBe( 1 );
 	} );
+
+	test( 'read can be called multiple times for session_reset support', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'test_session_reset';
+
+		// First read acquires lock and returns empty for new session
+		$data1 = $session->read( id: $session_id );
+		expect( $data1 )->toBe( '' );
+
+		// Write some data
+		$session->write( id: $session_id, data: 'original_data' );
+
+		// Second read on same session should work (simulates session_reset)
+		$data2 = $session->read( id: $session_id );
+		expect( $data2 )->toBe( 'original_data' );
+
+		// Verify we still hold the lock
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		$session->close();
+	} );
+
+	test( 'close without write for session_abort support', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'test_session_abort';
+
+		// Read acquires lock
+		$session->read( id: $session_id );
+
+		// Close without writing (simulates session_abort)
+		$result = $session->close();
+		expect( $result )->toBeTrue();
+
+		// Verify lock is released
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		// Verify no session data was written
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
 } );

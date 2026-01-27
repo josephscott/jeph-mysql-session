@@ -138,9 +138,13 @@ class Session implements \SessionHandlerInterface {
 	}
 
 	public function read( string $id ): string|false {
-		$lock_acquired = $this->acquire_lock( $id );
-		if ( $lock_acquired === false ) {
-			return false;
+		// Only acquire lock if we don't already hold one for this session
+		// This handles session_reset() which re-reads the same session
+		if ( $this->session_id !== $id ) {
+			$lock_acquired = $this->acquire_lock( $id );
+			if ( $lock_acquired === false ) {
+				return false;
+			}
 		}
 
 		$stmt = $this->pdo->prepare(
