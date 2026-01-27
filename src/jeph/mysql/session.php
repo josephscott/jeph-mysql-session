@@ -105,8 +105,9 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		// Check if a session with this ID exists in the database
 		// Called when session.use_strict_mode is enabled
 		// Returns true if session exists, false to generate a new ID
+		// Using EXISTS for efficiency - it short-circuits after finding the first row
 		$stmt = $this->pdo->prepare(
-			"SELECT COUNT(*) as cnt FROM {$this->table_name} WHERE session_id = :session_id"
+			"SELECT EXISTS(SELECT 1 FROM {$this->table_name} WHERE session_id = :session_id) as found"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -124,7 +125,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			return false;
 		}
 
-		return (int) $row['cnt'] > 0;
+		return (int) $row['found'] === 1;
 	}
 
 	public function updateTimestamp( string $id, string $data ): bool {
