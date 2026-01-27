@@ -1,5 +1,7 @@
 # JEPH/Framework/MySQL/Session
 
+[![Tests](https://github.com/josephscott/jeph-mysql-session/actions/workflows/tests.yml/badge.svg)](https://github.com/josephscott/jeph-mysql-session/actions/workflows/tests.yml)
+
 Just Enough PHP to provide MySQL session storage.
 
 A custom PHP session handler that stores session data in a MySQL database with proper session locking.
