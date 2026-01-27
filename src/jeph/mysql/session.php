@@ -166,16 +166,24 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$this->lock_token = bin2hex( random_bytes( 32 ) );
 		$deadline = time() + $this->lock_timeout;
 
+		// Prepare statements once outside the loop for better performance
+		$insert_stmt = $this->pdo->prepare(
+			"INSERT INTO {$this->lock_table_name} (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
+		);
+		if ( $insert_stmt === false ) {
+			return false;
+		}
+
+		$update_stmt = $this->pdo->prepare(
+			"UPDATE {$this->lock_table_name} SET lock_token = :lock_token, locked_at = :locked_at WHERE session_id = :session_id AND locked_at < :stale_threshold"
+		);
+		if ( $update_stmt === false ) {
+			return false;
+		}
+
 		while ( time() < $deadline ) {
 			// Try to insert a new lock
-			$stmt = $this->pdo->prepare(
-				"INSERT INTO {$this->lock_table_name} (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
-			);
-			if ( $stmt === false ) {
-				return false;
-			}
-
-			$result = $stmt->execute( [
+			$result = $insert_stmt->execute( [
 				':session_id' => $session_id,
 				':lock_token' => $this->lock_token,
 				':locked_at' => time(),
@@ -187,34 +195,26 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			}
 
 			// Check if it failed due to duplicate key (MySQL error 1062)
-			$error_info = $stmt->errorInfo();
+			$error_info = $insert_stmt->errorInfo();
 			if ( ! isset( $error_info[1] ) || (int) $error_info[1] !== 1062 ) {
 				// Some other error occurred
 				return false;
 			}
 
 			// Lock exists - check if it's stale
-			$stale_threshold = time() - $this->lock_max_age;
-			$stmt = $this->pdo->prepare(
-				"UPDATE {$this->lock_table_name} SET lock_token = :lock_token, locked_at = :locked_at WHERE session_id = :session_id AND locked_at < :stale_threshold"
-			);
-			if ( $stmt === false ) {
-				return false;
-			}
-
-			$current_time = time();
-			$result = $stmt->execute( [
+			$now = time();
+			$result = $update_stmt->execute( [
 				':lock_token' => $this->lock_token,
-				':locked_at' => $current_time,
+				':locked_at' => $now,
 				':session_id' => $session_id,
-				':stale_threshold' => $stale_threshold,
+				':stale_threshold' => $now - $this->lock_max_age,
 			] );
 
 			if ( $result === false ) {
 				return false;
 			}
 
-			if ( $stmt->rowCount() === 1 ) {
+			if ( $update_stmt->rowCount() === 1 ) {
 				// Successfully claimed stale lock
 				return true;
 			}
