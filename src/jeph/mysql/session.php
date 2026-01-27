@@ -29,6 +29,7 @@ class Session implements \SessionHandlerInterface {
 		int $lock_retry_interval = 100
 	) {
 		$this->pdo = $pdo;
+		$this->pdo->setAttribute( \PDO::ATTR_ERRMODE, \PDO::ERRMODE_SILENT );
 		$this->table_name = $table_name;
 		$this->lock_table_name = $lock_table_name;
 		$this->lock_timeout = $lock_timeout;
@@ -44,32 +45,29 @@ class Session implements \SessionHandlerInterface {
 
 		while ( time() < $deadline ) {
 			// Try to insert a new lock
-			try {
-				$stmt = $this->pdo->prepare(
-					"INSERT INTO {$this->lock_table_name} (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
-				);
-				if ( $stmt === false ) {
-					return false;
-				}
+			$stmt = $this->pdo->prepare(
+				"INSERT INTO {$this->lock_table_name} (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
+			);
+			if ( $stmt === false ) {
+				return false;
+			}
 
-				$result = $stmt->execute( [
-					':session_id' => $session_id,
-					':lock_token' => $this->lock_token,
-					':locked_at' => $now,
-				] );
+			$result = $stmt->execute( [
+				':session_id' => $session_id,
+				':lock_token' => $this->lock_token,
+				':locked_at' => $now,
+			] );
 
-				if ( $result === true ) {
-					// Lock acquired successfully
-					return true;
-				}
-			} catch ( \PDOException $e ) {
-				// Check if it failed due to duplicate key (MySQL error 1062)
-				if ( isset( $e->errorInfo[1] ) && $e->errorInfo[1] === 1062 ) {
-					// Lock exists, fall through to stale check below
-				} else {
-					// Some other error occurred
-					return false;
-				}
+			if ( $result === true ) {
+				// Lock acquired successfully
+				return true;
+			}
+
+			// Check if it failed due to duplicate key (MySQL error 1062)
+			$error_info = $stmt->errorInfo();
+			if ( !isset( $error_info[1] ) || $error_info[1] !== 1062 ) {
+				// Some other error occurred
+				return false;
 			}
 
 			// Lock exists - check if it's stale
