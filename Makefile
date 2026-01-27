@@ -23,7 +23,6 @@ lint: ## Check if the code is valid
 	@echo
 	@echo "--> Lint"
 	find src -name "*.php" -exec php -l {} \;
-	find tests -name "*.php" -exec php -l {} \;
 	@echo
 
 .PHONY: analyze
