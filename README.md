@@ -114,6 +114,28 @@ This handler implements table-based session locking to prevent race conditions d
 - Keep `lock_timeout` reasonable to avoid blocking requests indefinitely
 - The `lock_max_age` should be longer than your maximum expected script execution time
 
+### Long-Running Scripts
+
+For scripts that run longer than `lock_max_age`, use `refresh_lock()` to prevent the lock from becoming stale:
+
+```php
+$session_handler = JEPH\MySQL\Session::create( pdo: $pdo );
+session_set_save_handler( session_handler: $session_handler, register_shutdown: true );
+session_start();
+
+// For long operations, periodically refresh the lock
+foreach ( $large_dataset as $item ) {
+    process_item( $item );
+    
+    // Refresh lock every iteration (or based on time elapsed)
+    $session_handler->refresh_lock();
+}
+
+session_write_close();
+```
+
+The `refresh_lock()` method returns `true` if the lock was successfully refreshed, or `false` if no lock is held or the lock was lost. Call it at intervals shorter than `lock_max_age` (e.g., every `lock_max_age / 2` seconds).
+
 ## Testing
 
 Tests are written using [Pest](https://pestphp.com/) and require a MySQL database.

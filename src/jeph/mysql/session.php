@@ -242,6 +242,40 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 		return $result;
 	}
 
+	/**
+	 * Refresh the current lock's timestamp to prevent it from becoming stale.
+	 *
+	 * Use this in long-running scripts to extend the lock before it exceeds lock_max_age.
+	 * Should be called periodically (e.g., every lock_max_age / 2 seconds) in long operations.
+	 *
+	 * @return bool True if lock was refreshed, false if no lock held or refresh failed
+	 */
+	public function refresh_lock(): bool {
+		if ( $this->session_id === null || $this->lock_token === '' ) {
+			return false;
+		}
+
+		$stmt = $this->pdo->prepare(
+			"UPDATE {$this->lock_table_name} SET locked_at = :locked_at WHERE session_id = :session_id AND lock_token = :lock_token"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':locked_at' => time(),
+			':session_id' => $this->session_id,
+			':lock_token' => $this->lock_token,
+		] );
+
+		if ( $result === false ) {
+			return false;
+		}
+
+		// Verify the lock was actually updated (it still belongs to us)
+		return $stmt->rowCount() === 1;
+	}
+
 	public function open( string $path, string $name ): bool {
 		return true;
 	}

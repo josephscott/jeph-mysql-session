@@ -414,6 +414,119 @@ describe( 'Session Locking', function() {
 	} );
 } );
 
+describe( 'Lock Refresh', function() {
+	test( 'refresh_lock returns false when no lock is held', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		// No lock acquired yet
+		$result = $session->refresh_lock();
+		expect( $result )->toBeFalse();
+	} );
+
+	test( 'refresh_lock updates lock timestamp', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'refresh_lock_test';
+		$session->read( id: $session_id );
+
+		// Get original timestamp
+		$stmt = $this->pdo->prepare( 'SELECT locked_at FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		$original_timestamp = (int) $row['locked_at'];
+
+		// Wait a second to ensure timestamp changes
+		sleep( 1 );
+
+		// Refresh the lock
+		$result = $session->refresh_lock();
+		expect( $result )->toBeTrue();
+
+		// Verify timestamp was updated
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		$new_timestamp = (int) $row['locked_at'];
+
+		expect( $new_timestamp )->toBeGreaterThan( $original_timestamp );
+
+		$session->close();
+	} );
+
+	test( 'refresh_lock prevents lock from becoming stale', function() {
+		// Create session with very short lock_max_age
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_max_age: 2
+		);
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'refresh_prevents_stale_test';
+		$session->read( id: $session_id );
+
+		// Wait 1 second (still within max_age)
+		sleep( 1 );
+
+		// Refresh to reset the timestamp
+		$result = $session->refresh_lock();
+		expect( $result )->toBeTrue();
+
+		// Wait another 1 second (would be stale without refresh)
+		sleep( 1 );
+
+		// Lock should still be valid (not stale) because we refreshed
+		$stmt = $this->pdo->prepare( 'SELECT locked_at FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		$locked_at = (int) $row['locked_at'];
+
+		// The lock timestamp should be recent (within last 2 seconds)
+		expect( time() - $locked_at )->toBeLessThanOrEqual( 2 );
+
+		$session->close();
+	} );
+
+	test( 'refresh_lock returns false if lock was stolen', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'refresh_stolen_lock_test';
+		$session->read( id: $session_id );
+
+		// Simulate another process stealing the lock by updating the token
+		$stmt = $this->pdo->prepare(
+			'UPDATE session_locks SET lock_token = :new_token WHERE session_id = :session_id'
+		);
+		$stmt->execute( [
+			':new_token' => 'stolen_by_another_process',
+			':session_id' => $session_id,
+		] );
+
+		// Our refresh should fail because our token no longer matches
+		$result = $session->refresh_lock();
+		expect( $result )->toBeFalse();
+
+		// Clean up
+		$this->pdo->exec( "DELETE FROM session_locks WHERE session_id = '{$session_id}'" );
+	} );
+
+	test( 'refresh_lock returns false after lock is released', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'refresh_after_release_test';
+		$session->read( id: $session_id );
+
+		// Close releases the lock
+		$session->close();
+
+		// Refresh should fail - no lock held
+		$result = $session->refresh_lock();
+		expect( $result )->toBeFalse();
+	} );
+} );
+
 describe( 'Concurrent Session Locking', function() {
 	test( 'second process waits for lock release', function() {
 		$session_id = 'concurrent_test_' . uniqid();
