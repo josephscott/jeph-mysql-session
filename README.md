@@ -1,4 +1,6 @@
-# jeph-mysql-session
+# JEPH/Framework/MySQL/Session
+
+Just Enough PHP to provide MySQL session storage.
 
 A custom PHP session handler that stores session data in a MySQL database with proper session locking.
 
