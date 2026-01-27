@@ -61,6 +61,64 @@ describe( 'Factory Validation', function() {
 		);
 		expect( $session )->toBeFalse();
 	} );
+
+	test( 'create returns false for zero lock_timeout', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_timeout: 0
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for negative lock_timeout', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_timeout: -5
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for zero lock_max_age', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_max_age: 0
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for negative lock_max_age', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_max_age: -10
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for zero lock_retry_interval', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_retry_interval: 0
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for negative lock_retry_interval', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_retry_interval: -100
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create accepts valid positive numeric parameters', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_timeout: 5,
+			lock_max_age: 60,
+			lock_retry_interval: 50
+		);
+		expect( $session )->toBeInstanceOf( Session::class );
+	} );
 } );
 
 describe( 'Session Handler', function() {

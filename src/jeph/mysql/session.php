@@ -37,6 +37,17 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			return false;
 		}
 
+		// Validate numeric parameters must be positive
+		if ( $lock_timeout < 1 ) {
+			return false;
+		}
+		if ( $lock_max_age < 1 ) {
+			return false;
+		}
+		if ( $lock_retry_interval < 1 ) {
+			return false;
+		}
+
 		return new self(
 			pdo: $pdo,
 			table_name: $table_name,
