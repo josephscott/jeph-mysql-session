@@ -3,8 +3,18 @@ declare( strict_types = 1 );
 
 namespace JEPH\MySQL;
 
-class Session implements \SessionHandlerInterface, \SessionIdInterface, \SessionUpdateTimestampHandlerInterface {
-	private \PDO $pdo;
+use PDO;
+use SessionHandlerInterface;
+use SessionIdInterface;
+use SessionUpdateTimestampHandlerInterface;
+use function bin2hex;
+use function preg_match;
+use function random_bytes;
+use function time;
+use function usleep;
+
+class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {
+	private PDO $pdo;
 
 	private string $table_name;
 
@@ -21,7 +31,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 	private int $lock_retry_interval;
 
 	public static function create(
-		\PDO $pdo,
+		PDO $pdo,
 		string $table_name = 'sessions',
 		string $lock_table_name = 'session_locks',
 		int $lock_timeout = 10,
@@ -59,7 +69,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 	}
 
 	private function __construct(
-		\PDO $pdo,
+		PDO $pdo,
 		string $table_name,
 		string $lock_table_name,
 		int $lock_timeout,
@@ -67,7 +77,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 		int $lock_retry_interval
 	) {
 		$this->pdo = $pdo;
-		$this->pdo->setAttribute( \PDO::ATTR_ERRMODE, \PDO::ERRMODE_SILENT );
+		$this->pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT );
 		$this->table_name = $table_name;
 		$this->lock_table_name = $lock_table_name;
 		$this->lock_timeout = $lock_timeout;
@@ -109,7 +119,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			return false;
 		}
 
-		$row = $stmt->fetch( \PDO::FETCH_ASSOC );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
 		if ( $row === false ) {
 			return false;
 		}
@@ -308,7 +318,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			return false;
 		}
 
-		$row = $stmt->fetch( \PDO::FETCH_ASSOC );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
 		if ( $row === false ) {
 			// No existing session, return empty string (not an error)
 			return '';
