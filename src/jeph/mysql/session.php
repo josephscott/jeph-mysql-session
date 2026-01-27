@@ -167,7 +167,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 
 			// Check if it failed due to duplicate key (MySQL error 1062)
 			$error_info = $stmt->errorInfo();
-			if ( ! isset( $error_info[1] ) || $error_info[1] !== 1062 ) {
+			if ( ! isset( $error_info[1] ) || (int) $error_info[1] !== 1062 ) {
 				// Some other error occurred
 				return false;
 			}
