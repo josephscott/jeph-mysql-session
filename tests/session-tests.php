@@ -194,3 +194,55 @@ describe( 'Session Handler', function() {
 		expect( (int) $row['cnt'] )->toBe( 0 );
 	} );
 } );
+
+describe( 'Session ID Generation', function() {
+	test( 'create_sid returns a string', function() {
+		$session = new Session( pdo: $this->pdo );
+		$sid = $session->create_sid();
+
+		expect( $sid )->toBeString();
+	} );
+
+	test( 'create_sid returns 64 character hex string', function() {
+		$session = new Session( pdo: $this->pdo );
+		$sid = $session->create_sid();
+
+		// 32 bytes = 64 hex characters
+		expect( strlen( $sid ) )->toBe( 64 );
+		// Should only contain hex characters
+		expect( preg_match( '/^[a-f0-9]+$/', $sid ) )->toBe( 1 );
+	} );
+
+	test( 'create_sid returns unique IDs', function() {
+		$session = new Session( pdo: $this->pdo );
+
+		$ids = [];
+		for ( $i = 0; $i < 100; $i++ ) {
+			$ids[] = $session->create_sid();
+		}
+
+		// All IDs should be unique
+		$unique_ids = array_unique( $ids );
+		expect( count( $unique_ids ) )->toBe( 100 );
+	} );
+
+	test( 'create_sid can be used as session ID', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		// Generate a new session ID
+		$session_id = $session->create_sid();
+
+		// Use it to create a session
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'test_data' );
+		$session->close();
+
+		// Verify data was stored with generated ID
+		$stmt = $this->pdo->prepare( 'SELECT data FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( $row['data'] )->toBe( 'test_data' );
+	} );
+} );

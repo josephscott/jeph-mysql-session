@@ -3,7 +3,7 @@ declare( strict_types = 1 );
 
 namespace JEPH\MySQL;
 
-class Session implements \SessionHandlerInterface {
+class Session implements \SessionHandlerInterface, \SessionIdInterface {
 	private \PDO $pdo;
 
 	private string $table_name;
@@ -35,6 +35,12 @@ class Session implements \SessionHandlerInterface {
 		$this->lock_timeout = $lock_timeout;
 		$this->lock_max_age = $lock_max_age;
 		$this->lock_retry_interval = $lock_retry_interval;
+	}
+
+	public function create_sid(): string {
+		// Generate a cryptographically secure session ID
+		// 32 bytes = 64 hex characters, matching PHP's default session ID length
+		return bin2hex( random_bytes( 32 ) );
 	}
 
 	private function acquire_lock( string $session_id ): bool {
