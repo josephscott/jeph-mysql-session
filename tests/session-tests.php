@@ -246,3 +246,119 @@ describe( 'Session ID Generation', function() {
 		expect( $row['data'] )->toBe( 'test_data' );
 	} );
 } );
+
+describe( 'Session Validation and Timestamp', function() {
+	test( 'validateId returns false for non-existent session', function() {
+		$session = new Session( pdo: $this->pdo );
+
+		$result = $session->validateId( id: 'non_existent_session_id' );
+		expect( $result )->toBeFalse();
+	} );
+
+	test( 'validateId returns true for existing session', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'existing_session_for_validate';
+
+		// Create a session
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'some_data' );
+		$session->close();
+
+		// Validate the session ID
+		$session2 = new Session( pdo: $this->pdo );
+		$result = $session2->validateId( id: $session_id );
+		expect( $result )->toBeTrue();
+	} );
+
+	test( 'validateId returns false after session is destroyed', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'session_to_validate_then_destroy';
+
+		// Create and then destroy the session
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'temp_data' );
+		$session->destroy( id: $session_id );
+		$session->close();
+
+		// Validate should return false
+		$session2 = new Session( pdo: $this->pdo );
+		$result = $session2->validateId( id: $session_id );
+		expect( $result )->toBeFalse();
+	} );
+
+	test( 'updateTimestamp updates last_accessed without changing data', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'session_for_timestamp_update';
+		$original_data = 'original_session_data';
+
+		// Create a session
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: $original_data );
+		$session->close();
+
+		// Get original timestamp
+		$stmt = $this->pdo->prepare( 'SELECT last_accessed FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		$original_timestamp = (int) $row['last_accessed'];
+
+		// Wait a moment to ensure timestamp changes
+		sleep( 1 );
+
+		// Update timestamp only
+		$session2 = new Session( pdo: $this->pdo );
+		$session2->open( path: '', name: 'PHPSESSID' );
+		$session2->read( id: $session_id );
+		$result = $session2->updateTimestamp( id: $session_id, data: $original_data );
+		$session2->close();
+
+		expect( $result )->toBeTrue();
+
+		// Verify timestamp changed but data stayed the same
+		$stmt = $this->pdo->prepare( 'SELECT data, last_accessed FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( $row['data'] )->toBe( $original_data );
+		expect( (int) $row['last_accessed'] )->toBeGreaterThan( $original_timestamp );
+	} );
+
+	test( 'updateTimestamp acquires lock when needed', function() {
+		$session = new Session( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'session_for_timestamp_lock_test';
+
+		// Create a session
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'data' );
+		$session->close();
+
+		// Call updateTimestamp without prior read (no lock held)
+		$session2 = new Session( pdo: $this->pdo );
+		$session2->open( path: '', name: 'PHPSESSID' );
+		$result = $session2->updateTimestamp( id: $session_id, data: 'data' );
+
+		// Verify lock was acquired
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		expect( $result )->toBeTrue();
+
+		// Close releases the lock
+		$session2->close();
+
+		// Verify lock is released
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+} );

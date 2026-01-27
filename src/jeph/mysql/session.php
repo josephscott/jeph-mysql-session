@@ -3,7 +3,7 @@ declare( strict_types = 1 );
 
 namespace JEPH\MySQL;
 
-class Session implements \SessionHandlerInterface, \SessionIdInterface {
+class Session implements \SessionHandlerInterface, \SessionIdInterface, \SessionUpdateTimestampHandlerInterface {
 	private \PDO $pdo;
 
 	private string $table_name;
@@ -41,6 +41,66 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface {
 		// Generate a cryptographically secure session ID
 		// 32 bytes = 64 hex characters, matching PHP's default session ID length
 		return bin2hex( random_bytes( 32 ) );
+	}
+
+	public function validateId( string $id ): bool {
+		// Check if a session with this ID exists in the database
+		// Called when session.use_strict_mode is enabled
+		// Returns true if session exists, false to generate a new ID
+		$stmt = $this->pdo->prepare(
+			"SELECT COUNT(*) as cnt FROM {$this->table_name} WHERE session_id = :session_id"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':session_id' => $id,
+		] );
+		if ( $result === false ) {
+			return false;
+		}
+
+		$row = $stmt->fetch( \PDO::FETCH_ASSOC );
+		if ( $row === false ) {
+			return false;
+		}
+
+		return (int) $row['cnt'] > 0;
+	}
+
+	public function updateTimestamp( string $id, string $data ): bool {
+		// Update only the timestamp without rewriting session data
+		// Called when session.lazy_write is enabled and data hasn't changed
+		// This is more efficient than a full write
+
+		// Check if we need to acquire a lock for this session ID
+		if ( $this->session_id !== $id ) {
+			// Release old lock if we have one
+			$this->release_lock();
+
+			// Acquire lock for this session ID
+			$lock_acquired = $this->acquire_lock( $id );
+			if ( $lock_acquired === false ) {
+				return false;
+			}
+		}
+
+		$now = time();
+
+		$stmt = $this->pdo->prepare(
+			"UPDATE {$this->table_name} SET last_accessed = :last_accessed WHERE session_id = :session_id"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':last_accessed' => $now,
+			':session_id' => $id,
+		] );
+
+		return $result;
 	}
 
 	private function acquire_lock( string $session_id ): bool {
