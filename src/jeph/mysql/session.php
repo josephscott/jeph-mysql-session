@@ -307,11 +307,23 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 	}
 
 	public function destroy( string $id ): bool {
+		// Use transaction to ensure atomic deletion of session data and lock
+		$in_transaction = $this->pdo->inTransaction();
+		if ( $in_transaction === false ) {
+			$began = $this->pdo->beginTransaction();
+			if ( $began === false ) {
+				return false;
+			}
+		}
+
 		// Delete session data
 		$stmt = $this->pdo->prepare(
 			"DELETE FROM {$this->table_name} WHERE session_id = :session_id"
 		);
 		if ( $stmt === false ) {
+			if ( $in_transaction === false ) {
+				$this->pdo->rollBack();
+			}
 			return false;
 		}
 
@@ -319,6 +331,9 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			':session_id' => $id,
 		] );
 		if ( $result === false ) {
+			if ( $in_transaction === false ) {
+				$this->pdo->rollBack();
+			}
 			return false;
 		}
 
@@ -330,16 +345,29 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 				"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id AND lock_token = :lock_token"
 			);
 			if ( $stmt === false ) {
+				if ( $in_transaction === false ) {
+					$this->pdo->rollBack();
+				}
 				return false;
 			}
 
-			$stmt->execute( [
+			$result = $stmt->execute( [
 				':session_id' => $id,
 				':lock_token' => $this->lock_token,
 			] );
+			if ( $result === false ) {
+				if ( $in_transaction === false ) {
+					$this->pdo->rollBack();
+				}
+				return false;
+			}
 
 			$this->session_id = null;
 			$this->lock_token = '';
+		}
+
+		if ( $in_transaction === false ) {
+			$this->pdo->commit();
 		}
 
 		return true;

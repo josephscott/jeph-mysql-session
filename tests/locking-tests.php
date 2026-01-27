@@ -144,6 +144,75 @@ describe( 'Session Locking', function() {
 		expect( (int) $row['cnt'] )->toBe( 0 );
 	} );
 
+	test( 'destroy works within existing transaction', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'destroy_in_transaction_test';
+
+		// Read to acquire lock and write data
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'test_data' );
+
+		// Start an external transaction
+		$this->pdo->beginTransaction();
+
+		// Destroy should work within the existing transaction
+		$result = $session->destroy( id: $session_id );
+		expect( $result )->toBeTrue();
+
+		// Commit the external transaction
+		$this->pdo->commit();
+
+		// Verify both session data and lock are gone
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+
+	test( 'destroy atomically removes session and lock', function() {
+		$session = Session::create( pdo: $this->pdo );
+		$session->open( path: '', name: 'PHPSESSID' );
+
+		$session_id = 'destroy_atomic_test';
+
+		// Read to acquire lock and write data
+		$session->read( id: $session_id );
+		$session->write( id: $session_id, data: 'test_data' );
+
+		// Verify both exist before destroy
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Destroy should atomically remove both
+		$result = $session->destroy( id: $session_id );
+		expect( $result )->toBeTrue();
+
+		// Verify both are gone after destroy
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+
 	test( 'destroy does not delete another process lock', function() {
 		$session_id = 'destroy_other_lock_test';
 
