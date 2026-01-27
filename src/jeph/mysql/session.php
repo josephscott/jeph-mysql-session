@@ -134,15 +134,57 @@ class Session implements \SessionHandlerInterface {
 	}
 
 	public function close(): bool {
-		return true;
+		return $this->release_lock();
 	}
 
 	public function read( string $id ): string|false {
-		return '';
+		$lock_acquired = $this->acquire_lock( $id );
+		if ( $lock_acquired === false ) {
+			return false;
+		}
+
+		$stmt = $this->pdo->prepare(
+			"SELECT data FROM {$this->table_name} WHERE session_id = :session_id"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':session_id' => $id,
+		] );
+		if ( $result === false ) {
+			return false;
+		}
+
+		$row = $stmt->fetch( \PDO::FETCH_ASSOC );
+		if ( $row === false ) {
+			// No existing session, return empty string (not an error)
+			return '';
+		}
+
+		return $row['data'];
 	}
 
 	public function write( string $id, string $data ): bool {
-		return true;
+		$now = time();
+
+		$stmt = $this->pdo->prepare(
+			"INSERT INTO {$this->table_name} (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed) ON DUPLICATE KEY UPDATE data = :data_update, last_accessed = :last_accessed_update"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':session_id' => $id,
+			':data' => $data,
+			':last_accessed' => $now,
+			':data_update' => $data,
+			':last_accessed_update' => $now,
+		] );
+
+		return $result;
 	}
 
 	public function destroy( string $id ): bool {
