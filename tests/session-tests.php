@@ -12,14 +12,65 @@ afterEach( function() {
 	drop_test_tables( $this->pdo );
 } );
 
+describe( 'Factory Validation', function() {
+	test( 'create returns Session for valid table names', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			table_name: 'my_sessions_123',
+			lock_table_name: 'my_locks_456'
+		);
+		expect( $session )->toBeInstanceOf( Session::class );
+	} );
+
+	test( 'create returns false for table name with spaces', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			table_name: 'my sessions'
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for table name with semicolon', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			table_name: 'sessions; DROP TABLE users;--'
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for table name with quotes', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			table_name: "sessions'--"
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for empty table name', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			table_name: ''
+		);
+		expect( $session )->toBeFalse();
+	} );
+
+	test( 'create returns false for invalid lock table name', function() {
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_table_name: 'locks; DROP TABLE users;--'
+		);
+		expect( $session )->toBeFalse();
+	} );
+} );
+
 describe( 'Session Handler', function() {
 	test( 'open returns true', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		expect( $session->open( path: '', name: 'PHPSESSID' ) )->toBeTrue();
 	} );
 
 	test( 'read returns empty string for new session', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$data = $session->read( id: 'test_session_id_123' );
@@ -29,7 +80,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'write stores session data', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_session_id_456';
@@ -49,7 +100,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'read returns previously written data', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_session_id_789';
@@ -60,7 +111,7 @@ describe( 'Session Handler', function() {
 		$session->close();
 
 		// Read again in new session
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$session2->open( path: '', name: 'PHPSESSID' );
 		$data = $session2->read( id: $session_id );
 		$session2->close();
@@ -69,7 +120,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'destroy removes session data', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_session_to_destroy';
@@ -78,7 +129,7 @@ describe( 'Session Handler', function() {
 		$session->close();
 
 		// Destroy the session
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$result = $session2->destroy( id: $session_id );
 		expect( $result )->toBeTrue();
 
@@ -91,7 +142,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'gc removes expired sessions', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		// Create a session
@@ -106,7 +157,7 @@ describe( 'Session Handler', function() {
 		$stmt->execute( [ ':time' => $old_time, ':session_id' => $session_id ] );
 
 		// Run gc with 30 minute lifetime
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$deleted = $session2->gc( max_lifetime: 1800 );
 
 		expect( $deleted )->toBe( 1 );
@@ -120,7 +171,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'gc does not remove recent sessions', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_recent_session';
@@ -129,7 +180,7 @@ describe( 'Session Handler', function() {
 		$session->close();
 
 		// Run gc - session should survive
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$deleted = $session2->gc( max_lifetime: 1800 );
 
 		expect( $deleted )->toBe( 0 );
@@ -143,7 +194,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'read can be called multiple times for session_reset support', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_session_reset';
@@ -169,7 +220,7 @@ describe( 'Session Handler', function() {
 	} );
 
 	test( 'close without write for session_abort support', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'test_session_abort';
@@ -197,14 +248,14 @@ describe( 'Session Handler', function() {
 
 describe( 'Session ID Generation', function() {
 	test( 'create_sid returns a string', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$sid = $session->create_sid();
 
 		expect( $sid )->toBeString();
 	} );
 
 	test( 'create_sid returns 64 character hex string', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$sid = $session->create_sid();
 
 		// 32 bytes = 64 hex characters
@@ -214,7 +265,7 @@ describe( 'Session ID Generation', function() {
 	} );
 
 	test( 'create_sid returns unique IDs', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 
 		$ids = [];
 		for ( $i = 0; $i < 100; $i++ ) {
@@ -227,7 +278,7 @@ describe( 'Session ID Generation', function() {
 	} );
 
 	test( 'create_sid can be used as session ID', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		// Generate a new session ID
@@ -249,14 +300,14 @@ describe( 'Session ID Generation', function() {
 
 describe( 'Session Validation and Timestamp', function() {
 	test( 'validateId returns false for non-existent session', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 
 		$result = $session->validateId( id: 'non_existent_session_id' );
 		expect( $result )->toBeFalse();
 	} );
 
 	test( 'validateId returns true for existing session', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'existing_session_for_validate';
@@ -267,13 +318,13 @@ describe( 'Session Validation and Timestamp', function() {
 		$session->close();
 
 		// Validate the session ID
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$result = $session2->validateId( id: $session_id );
 		expect( $result )->toBeTrue();
 	} );
 
 	test( 'validateId returns false after session is destroyed', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'session_to_validate_then_destroy';
@@ -285,13 +336,13 @@ describe( 'Session Validation and Timestamp', function() {
 		$session->close();
 
 		// Validate should return false
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$result = $session2->validateId( id: $session_id );
 		expect( $result )->toBeFalse();
 	} );
 
 	test( 'updateTimestamp updates last_accessed without changing data', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'session_for_timestamp_update';
@@ -312,7 +363,7 @@ describe( 'Session Validation and Timestamp', function() {
 		sleep( 1 );
 
 		// Update timestamp only
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$session2->open( path: '', name: 'PHPSESSID' );
 		$session2->read( id: $session_id );
 		$result = $session2->updateTimestamp( id: $session_id, data: $original_data );
@@ -330,7 +381,7 @@ describe( 'Session Validation and Timestamp', function() {
 	} );
 
 	test( 'updateTimestamp acquires lock when needed', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'session_for_timestamp_lock_test';
@@ -341,7 +392,7 @@ describe( 'Session Validation and Timestamp', function() {
 		$session->close();
 
 		// Call updateTimestamp without prior read (no lock held)
-		$session2 = new Session( pdo: $this->pdo );
+		$session2 = Session::create( pdo: $this->pdo );
 		$session2->open( path: '', name: 'PHPSESSID' );
 		$result = $session2->updateTimestamp( id: $session_id, data: 'data' );
 

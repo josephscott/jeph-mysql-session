@@ -40,7 +40,11 @@ $pdo = new PDO(
 create_test_tables( $pdo );
 
 // Create session handler and acquire lock
-$session = new Session( pdo: $pdo );
+$session = Session::create( pdo: $pdo );
+if ( $session === false ) {
+	fwrite( STDERR, "Failed to create session handler\n" );
+	exit( 1 );
+}
 $session->open( path: '', name: 'PHPSESSID' );
 
 $data = $session->read( id: $session_id );

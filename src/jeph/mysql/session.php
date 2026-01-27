@@ -20,13 +20,40 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 
 	private int $lock_retry_interval;
 
-	public function __construct(
+	public static function create(
 		\PDO $pdo,
 		string $table_name = 'sessions',
 		string $lock_table_name = 'session_locks',
 		int $lock_timeout = 10,
 		int $lock_max_age = 30,
 		int $lock_retry_interval = 100
+	): self|false {
+		// Validate table names to prevent SQL injection
+		// Only allow alphanumeric characters and underscores
+		if ( self::is_valid_table_name( $table_name ) === false ) {
+			return false;
+		}
+		if ( self::is_valid_table_name( $lock_table_name ) === false ) {
+			return false;
+		}
+
+		return new self(
+			pdo: $pdo,
+			table_name: $table_name,
+			lock_table_name: $lock_table_name,
+			lock_timeout: $lock_timeout,
+			lock_max_age: $lock_max_age,
+			lock_retry_interval: $lock_retry_interval
+		);
+	}
+
+	private function __construct(
+		\PDO $pdo,
+		string $table_name,
+		string $lock_table_name,
+		int $lock_timeout,
+		int $lock_max_age,
+		int $lock_retry_interval
 	) {
 		$this->pdo = $pdo;
 		$this->pdo->setAttribute( \PDO::ATTR_ERRMODE, \PDO::ERRMODE_SILENT );
@@ -35,6 +62,16 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 		$this->lock_timeout = $lock_timeout;
 		$this->lock_max_age = $lock_max_age;
 		$this->lock_retry_interval = $lock_retry_interval;
+	}
+
+	private static function is_valid_table_name( string $name ): bool {
+		// Table names must be non-empty and contain only alphanumeric characters and underscores
+		// This prevents SQL injection when table names are interpolated into queries
+		if ( $name === '' ) {
+			return false;
+		}
+
+		return preg_match( '/^[a-zA-Z0-9_]+$/', $name ) === 1;
 	}
 
 	public function create_sid(): string {

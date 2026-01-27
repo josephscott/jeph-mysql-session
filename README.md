@@ -18,7 +18,10 @@ $pdo = new PDO(
 );
 
 // Create the session handler
-$session_handler = new JEPH\MySQL\Session( pdo: $pdo );
+$session_handler = JEPH\MySQL\Session::create( pdo: $pdo );
+if ( $session_handler === false ) {
+    die( 'Failed to create session handler' );
+}
 
 // Register the handler
 session_set_save_handler( session_handler: $session_handler, register_shutdown: true );
@@ -30,10 +33,10 @@ $_SESSION['user_id'] = 123;
 
 ## Configuration Options
 
-All options are passed to the constructor:
+All options are passed to the `create()` factory method, which returns `Session|false`:
 
 ```php
-$session_handler = new JEPH\MySQL\Session(
+$session_handler = JEPH\MySQL\Session::create(
     pdo: $pdo,
     table_name: 'sessions',        // Session data table (default: 'sessions')
     lock_table_name: 'session_locks', // Lock table (default: 'session_locks')
@@ -41,7 +44,12 @@ $session_handler = new JEPH\MySQL\Session(
     lock_max_age: 30,              // Seconds before lock is stale (default: 30)
     lock_retry_interval: 100       // Milliseconds between retries (default: 100)
 );
+if ( $session_handler === false ) {
+    die( 'Invalid configuration' );
+}
 ```
+
+The factory method returns `false` if table names contain invalid characters (only alphanumeric and underscores are allowed) to prevent SQL injection.
 
 | Option | Default | Description |
 |--------|---------|-------------|

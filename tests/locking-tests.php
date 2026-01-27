@@ -14,7 +14,7 @@ afterEach( function() {
 
 describe( 'Session Locking', function() {
 	test( 'lock is acquired on read', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'lock_test_session';
@@ -31,7 +31,7 @@ describe( 'Session Locking', function() {
 	} );
 
 	test( 'lock is released on close', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$session_id = 'lock_release_test';
@@ -61,7 +61,7 @@ describe( 'Session Locking', function() {
 		] );
 
 		// Try to acquire lock with lock_max_age of 30 seconds
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_max_age: 30
 		);
@@ -96,7 +96,7 @@ describe( 'Session Locking', function() {
 		] );
 
 		// Try to acquire lock with very short timeout
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_timeout: 1,
 			lock_max_age: 30,
@@ -127,7 +127,7 @@ describe( 'Session Locking', function() {
 		] );
 
 		// Destroy should clean it up
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->destroy( id: $session_id );
 
 		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
@@ -152,7 +152,7 @@ describe( 'Session Locking', function() {
 		}
 
 		// Run gc with lock_max_age of 30 seconds
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_max_age: 30
 		);
@@ -178,7 +178,7 @@ describe( 'Session Locking', function() {
 		] );
 
 		// Run gc with lock_max_age of 30 seconds
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_max_age: 30
 		);
@@ -220,7 +220,7 @@ describe( 'Session Locking', function() {
 		}
 
 		// Run gc with lock_max_age of 30 seconds
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_max_age: 30
 		);
@@ -292,7 +292,7 @@ describe( 'Concurrent Session Locking', function() {
 		expect( (int) $row['cnt'] )->toBe( 1 );
 
 		// Try to acquire same lock - should succeed after background process releases
-		$session = new Session(
+		$session = Session::create(
 			pdo: $this->pdo,
 			lock_timeout: 5
 		);
@@ -318,7 +318,7 @@ describe( 'Concurrent Session Locking', function() {
 
 describe( 'Session Regenerate ID', function() {
 	test( 'write to new session ID acquires lock', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$old_id = 'old_session_id';
@@ -359,7 +359,7 @@ describe( 'Session Regenerate ID', function() {
 	} );
 
 	test( 'destroy then write simulates session_regenerate_id with delete', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$old_id = 'old_session_to_destroy';
@@ -408,7 +408,7 @@ describe( 'Session Regenerate ID', function() {
 	} );
 
 	test( 'close releases lock on new session ID after regenerate', function() {
-		$session = new Session( pdo: $this->pdo );
+		$session = Session::create( pdo: $this->pdo );
 		$session->open( path: '', name: 'PHPSESSID' );
 
 		$old_id = 'session_before_regenerate';
