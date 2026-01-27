@@ -102,3 +102,42 @@ This handler implements table-based session locking to prevent race conditions d
 - Call `session_write_close()` early in long-running scripts to release the lock
 - Keep `lock_timeout` reasonable to avoid blocking requests indefinitely
 - The `lock_max_age` should be longer than your maximum expected script execution time
+
+## Testing
+
+Tests are written using [Pest](https://pestphp.com/) and require a MySQL database.
+
+### Setup
+
+1. Create a test database and user:
+
+```sql
+CREATE DATABASE jeph_session_test;
+CREATE USER 'jeph_session_test'@'localhost' IDENTIFIED BY 'jeph_session_test';
+GRANT ALL PRIVILEGES ON jeph_session_test.* TO 'jeph_session_test'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+2. Configure the database connection via environment variables (if using different credentials):
+
+```bash
+export TEST_DB_HOST=localhost
+export TEST_DB_PORT=3306
+export TEST_DB_NAME=jeph_session_test
+export TEST_DB_USER=jeph_session_test
+export TEST_DB_PASS=jeph_session_test
+```
+
+### Running Tests
+
+```bash
+# Run all checks (style, lint, analyze, tests)
+make all
+
+# Run only tests
+make tests
+```
+
+The test suite includes:
+- **session-tests.php** - Basic session handler functionality (read, write, destroy, gc)
+- **locking-tests.php** - Lock acquisition, release, stale lock handling, and concurrent access tests
