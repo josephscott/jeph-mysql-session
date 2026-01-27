@@ -314,6 +314,81 @@ describe( 'Concurrent Session Locking', function() {
 
 		$session->close();
 	} );
+
+	test( 'lock timestamp reflects actual acquisition time not attempt start', function() {
+		$session_id = 'timestamp_test_' . uniqid();
+		$helper_script = __DIR__ . '/helpers/lock-holder.php';
+
+		// Skip if helper doesn't exist
+		if ( ! file_exists( $helper_script ) ) {
+			$this->markTestSkipped( 'Lock holder helper script not found' );
+		}
+
+		// Start a background process that holds a lock for 2 seconds
+		$cmd = sprintf(
+			'php %s %s %d',
+			escapeshellarg( $helper_script ),
+			escapeshellarg( $session_id ),
+			2 // hold for 2 seconds
+		);
+
+		$descriptors = [
+			0 => [ 'pipe', 'r' ],
+			1 => [ 'pipe', 'w' ],
+			2 => [ 'pipe', 'w' ],
+		];
+
+		$process = proc_open( $cmd, $descriptors, $pipes );
+		if ( ! is_resource( $process ) ) {
+			$this->markTestSkipped( 'Failed to start background process' );
+		}
+
+		// Close stdin
+		fclose( $pipes[0] );
+
+		// Wait for the process to acquire the lock
+		$output = fgets( $pipes[1] );
+		if ( strpos( $output, 'Lock acquired' ) === false ) {
+			$error = stream_get_contents( $pipes[2] );
+			fclose( $pipes[1] );
+			fclose( $pipes[2] );
+			proc_close( $process );
+			$this->fail( "Background process failed to acquire lock: {$error}" );
+		}
+
+		// Record time before we start trying to acquire
+		$attempt_start = time();
+
+		// Try to acquire same lock - will wait ~2 seconds
+		$session = Session::create(
+			pdo: $this->pdo,
+			lock_timeout: 5
+		);
+		$session->open( path: '', name: 'PHPSESSID' );
+		$session->read( id: $session_id );
+
+		// Record time after lock acquired
+		$acquired_time = time();
+
+		// Clean up background process
+		fclose( $pipes[1] );
+		fclose( $pipes[2] );
+		proc_close( $process );
+
+		// Check the locked_at timestamp in database
+		$stmt = $this->pdo->prepare( 'SELECT locked_at FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		$locked_at = (int) $row['locked_at'];
+
+		// The locked_at should be close to when we actually got the lock (acquired_time)
+		// not when we started trying (attempt_start)
+		// Allow 1 second tolerance for timing variations
+		expect( $locked_at )->toBeGreaterThanOrEqual( $attempt_start + 1 );
+		expect( $locked_at )->toBeLessThanOrEqual( $acquired_time + 1 );
+
+		$session->close();
+	} );
 } );
 
 describe( 'Session Regenerate ID', function() {

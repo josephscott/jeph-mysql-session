@@ -143,8 +143,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 	private function acquire_lock( string $session_id ): bool {
 		$this->session_id = $session_id;
 		$this->lock_token = bin2hex( random_bytes( 32 ) );
-		$now = time();
-		$deadline = $now + $this->lock_timeout;
+		$deadline = time() + $this->lock_timeout;
 
 		while ( time() < $deadline ) {
 			// Try to insert a new lock
@@ -158,7 +157,7 @@ class Session implements \SessionHandlerInterface, \SessionIdInterface, \Session
 			$result = $stmt->execute( [
 				':session_id' => $session_id,
 				':lock_token' => $this->lock_token,
-				':locked_at' => $now,
+				':locked_at' => time(),
 			] );
 
 			if ( $result === true ) {
