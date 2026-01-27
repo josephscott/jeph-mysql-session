@@ -107,7 +107,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		// Returns true if session exists, false to generate a new ID
 		// Using EXISTS for efficiency - it short-circuits after finding the first row
 		$stmt = $this->pdo->prepare(
-			"SELECT EXISTS(SELECT 1 FROM {$this->table_name} WHERE session_id = :session_id) as found"
+			"SELECT EXISTS(SELECT 1 FROM `{$this->table_name}` WHERE session_id = :session_id) as found"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -148,7 +148,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$now = time();
 
 		$stmt = $this->pdo->prepare(
-			"UPDATE {$this->table_name} SET last_accessed = :last_accessed WHERE session_id = :session_id"
+			"UPDATE `{$this->table_name}` SET last_accessed = :last_accessed WHERE session_id = :session_id"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -169,14 +169,14 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 
 		// Prepare statements once outside the loop for better performance
 		$insert_stmt = $this->pdo->prepare(
-			"INSERT INTO {$this->lock_table_name} (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
+			"INSERT INTO `{$this->lock_table_name}` (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)"
 		);
 		if ( $insert_stmt === false ) {
 			return false;
 		}
 
 		$update_stmt = $this->pdo->prepare(
-			"UPDATE {$this->lock_table_name} SET lock_token = :lock_token, locked_at = :locked_at WHERE session_id = :session_id AND locked_at < :stale_threshold"
+			"UPDATE `{$this->lock_table_name}` SET lock_token = :lock_token, locked_at = :locked_at WHERE session_id = :session_id AND locked_at < :stale_threshold"
 		);
 		if ( $update_stmt === false ) {
 			return false;
@@ -237,7 +237,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		$stmt = $this->pdo->prepare(
-			"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id AND lock_token = :lock_token"
+			"DELETE FROM `{$this->lock_table_name}` WHERE session_id = :session_id AND lock_token = :lock_token"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -268,7 +268,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		$stmt = $this->pdo->prepare(
-			"UPDATE {$this->lock_table_name} SET locked_at = :locked_at WHERE session_id = :session_id AND lock_token = :lock_token"
+			"UPDATE `{$this->lock_table_name}` SET locked_at = :locked_at WHERE session_id = :session_id AND lock_token = :lock_token"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -307,7 +307,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		$stmt = $this->pdo->prepare(
-			"SELECT data FROM {$this->table_name} WHERE session_id = :session_id"
+			"SELECT data FROM `{$this->table_name}` WHERE session_id = :session_id"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -346,7 +346,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$now = time();
 
 		$stmt = $this->pdo->prepare(
-			"INSERT INTO {$this->table_name} (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed) ON DUPLICATE KEY UPDATE data = :data_update, last_accessed = :last_accessed_update"
+			"INSERT INTO `{$this->table_name}` (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed) ON DUPLICATE KEY UPDATE data = :data_update, last_accessed = :last_accessed_update"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -375,7 +375,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 
 		// Delete session data
 		$stmt = $this->pdo->prepare(
-			"DELETE FROM {$this->table_name} WHERE session_id = :session_id"
+			"DELETE FROM `{$this->table_name}` WHERE session_id = :session_id"
 		);
 		if ( $stmt === false ) {
 			if ( $in_transaction === false ) {
@@ -399,7 +399,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		// If we don't own the lock, leave it - the owner will release it or GC will clean it up
 		if ( $this->session_id === $id && $this->lock_token !== '' ) {
 			$stmt = $this->pdo->prepare(
-				"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id AND lock_token = :lock_token"
+				"DELETE FROM `{$this->lock_table_name}` WHERE session_id = :session_id AND lock_token = :lock_token"
 			);
 			if ( $stmt === false ) {
 				if ( $in_transaction === false ) {
@@ -435,7 +435,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 
 		// Delete expired sessions
 		$stmt = $this->pdo->prepare(
-			"DELETE FROM {$this->table_name} WHERE last_accessed < :threshold"
+			"DELETE FROM `{$this->table_name}` WHERE last_accessed < :threshold"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -453,7 +453,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		// Also clean up stale locks
 		$lock_threshold = time() - $this->lock_max_age;
 		$stmt = $this->pdo->prepare(
-			"DELETE FROM {$this->lock_table_name} WHERE locked_at < :threshold"
+			"DELETE FROM `{$this->lock_table_name}` WHERE locked_at < :threshold"
 		);
 		if ( $stmt === false ) {
 			return $deleted_sessions;
