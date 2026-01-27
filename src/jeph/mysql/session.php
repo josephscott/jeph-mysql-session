@@ -65,7 +65,7 @@ class Session implements \SessionHandlerInterface {
 
 			// Check if it failed due to duplicate key (MySQL error 1062)
 			$error_info = $stmt->errorInfo();
-			if ( !isset( $error_info[1] ) || $error_info[1] !== 1062 ) {
+			if ( ! isset( $error_info[1] ) || $error_info[1] !== 1062 ) {
 				// Some other error occurred
 				return false;
 			}
@@ -188,10 +188,69 @@ class Session implements \SessionHandlerInterface {
 	}
 
 	public function destroy( string $id ): bool {
+		// Delete session data
+		$stmt = $this->pdo->prepare(
+			"DELETE FROM {$this->table_name} WHERE session_id = :session_id"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':session_id' => $id,
+		] );
+		if ( $result === false ) {
+			return false;
+		}
+
+		// Also clean up any lock for this session
+		$stmt = $this->pdo->prepare(
+			"DELETE FROM {$this->lock_table_name} WHERE session_id = :session_id"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$stmt->execute( [
+			':session_id' => $id,
+		] );
+
 		return true;
 	}
 
 	public function gc( int $max_lifetime ): int|false {
-		return 0;
+		$threshold = time() - $max_lifetime;
+
+		// Delete expired sessions
+		$stmt = $this->pdo->prepare(
+			"DELETE FROM {$this->table_name} WHERE last_accessed < :threshold"
+		);
+		if ( $stmt === false ) {
+			return false;
+		}
+
+		$result = $stmt->execute( [
+			':threshold' => $threshold,
+		] );
+		if ( $result === false ) {
+			return false;
+		}
+
+		$deleted_sessions = $stmt->rowCount();
+
+		// Also clean up stale locks
+		$lock_threshold = time() - $this->lock_max_age;
+		$stmt = $this->pdo->prepare(
+			"DELETE FROM {$this->lock_table_name} WHERE locked_at < :threshold"
+		);
+		if ( $stmt === false ) {
+			return $deleted_sessions;
+		}
+
+		$stmt->execute( [
+			':threshold' => $lock_threshold,
+		] );
+
+		return $deleted_sessions;
 	}
 }
