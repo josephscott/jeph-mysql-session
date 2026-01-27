@@ -65,4 +65,4 @@ jobs:
           TEST_DB_NAME: jeph_session_test
           TEST_DB_USER: jeph_session_test
           TEST_DB_PASS: jeph_session_test
-        run: ./vendor/bin/pest
+        run: make tests
