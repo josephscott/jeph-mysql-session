@@ -44,7 +44,8 @@ function create_test_tables( PDO $pdo ): void {
 		CREATE TABLE IF NOT EXISTS session_locks (
 			session_id VARCHAR(128) NOT NULL PRIMARY KEY,
 			lock_token VARCHAR(64) NOT NULL,
-			locked_at INT UNSIGNED NOT NULL
+			locked_at INT UNSIGNED NOT NULL,
+			INDEX idx_locked_at (locked_at)
 		) ENGINE=InnoDB
 	' );
 

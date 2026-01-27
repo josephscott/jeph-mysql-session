@@ -59,7 +59,8 @@ Used for table-based session locking to ensure data consistency during concurren
 CREATE TABLE session_locks (
     session_id VARCHAR(128) NOT NULL PRIMARY KEY,
     lock_token VARCHAR(64) NOT NULL,
-    locked_at INT UNSIGNED NOT NULL
+    locked_at INT UNSIGNED NOT NULL,
+    INDEX idx_locked_at (locked_at)
 ) ENGINE=InnoDB;
 ```
 

@@ -165,6 +165,81 @@ describe( 'Session Locking', function() {
 
 		expect( (int) $row['cnt'] )->toBe( 0 );
 	} );
+
+	test( 'gc does not remove recent locks', function() {
+		// Insert a recent lock (current time)
+		$stmt = $this->pdo->prepare(
+			'INSERT INTO session_locks (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)'
+		);
+		$stmt->execute( [
+			':session_id' => 'recent_lock_gc_test',
+			':lock_token' => 'recent_token',
+			':locked_at' => time(),
+		] );
+
+		// Run gc with lock_max_age of 30 seconds
+		$session = new Session(
+			pdo: $this->pdo,
+			lock_max_age: 30
+		);
+		$session->gc( max_lifetime: 1800 );
+
+		// Recent lock should still exist
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => 'recent_lock_gc_test' ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 1 );
+	} );
+
+	test( 'gc removes only stale locks and keeps recent ones', function() {
+		$stale_time = time() - 120; // 2 minutes old
+
+		// Insert 2 stale locks
+		for ( $i = 0; $i < 2; $i++ ) {
+			$stmt = $this->pdo->prepare(
+				'INSERT INTO session_locks (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)'
+			);
+			$stmt->execute( [
+				':session_id' => "mixed_stale_{$i}",
+				':lock_token' => "stale_token_{$i}",
+				':locked_at' => $stale_time,
+			] );
+		}
+
+		// Insert 2 recent locks
+		for ( $i = 0; $i < 2; $i++ ) {
+			$stmt = $this->pdo->prepare(
+				'INSERT INTO session_locks (session_id, lock_token, locked_at) VALUES (:session_id, :lock_token, :locked_at)'
+			);
+			$stmt->execute( [
+				':session_id' => "mixed_recent_{$i}",
+				':lock_token' => "recent_token_{$i}",
+				':locked_at' => time(),
+			] );
+		}
+
+		// Run gc with lock_max_age of 30 seconds
+		$session = new Session(
+			pdo: $this->pdo,
+			lock_max_age: 30
+		);
+		$session->gc( max_lifetime: 1800 );
+
+		// Only 2 recent locks should remain
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks' );
+		$stmt->execute();
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 2 );
+
+		// Verify the recent ones are the ones that remain
+		$stmt = $this->pdo->prepare( 'SELECT session_id FROM session_locks ORDER BY session_id' );
+		$stmt->execute();
+		$rows = $stmt->fetchAll( PDO::FETCH_COLUMN );
+
+		expect( $rows )->toBe( [ 'mixed_recent_0', 'mixed_recent_1' ] );
+	} );
 } );
 
 describe( 'Concurrent Session Locking', function() {
