@@ -1,0 +1,493 @@
+<?php
+declare( strict_types = 1 );
+
+use JEPH\MySQL\Session;
+
+/**
+ * Integration tests that use actual PHP session functions (session_start, etc.)
+ * to verify the handler works correctly in real-world scenarios.
+ */
+beforeEach( function() {
+	$this->pdo = create_test_pdo();
+	create_test_tables( $this->pdo );
+
+	// Ensure no session is active from previous tests
+	if ( session_status() === PHP_SESSION_ACTIVE ) {
+		session_write_close();
+	}
+
+	// Reset session state
+	$_SESSION = [];
+} );
+
+afterEach( function() {
+	// Clean up any active session
+	if ( session_status() === PHP_SESSION_ACTIVE ) {
+		session_write_close();
+	}
+
+	// Reset session configuration to defaults
+	session_name( 'PHPSESSID' );
+
+	drop_test_tables( $this->pdo );
+} );
+
+describe( 'Integration - Basic Session Operations', function() {
+	test( 'session_start works with handler', function() {
+		$handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler, false );
+
+		// Generate a unique session ID for this test
+		session_id( 'integration_basic_' . bin2hex( random_bytes( 8 ) ) );
+
+		$result = session_start();
+		expect( $result )->toBeTrue();
+		expect( session_status() )->toBe( PHP_SESSION_ACTIVE );
+
+		// Set some session data
+		$_SESSION['test_key'] = 'test_value';
+		$_SESSION['user_id'] = 42;
+
+		session_write_close();
+		expect( session_status() )->toBe( PHP_SESSION_NONE );
+	} );
+
+	test( 'session data persists across session_start calls', function() {
+		$session_id = 'integration_persist_' . bin2hex( random_bytes( 8 ) );
+
+		// First session: write data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['username'] = 'testuser';
+		$_SESSION['logged_in'] = true;
+
+		session_write_close();
+
+		// Clear $_SESSION to simulate new request
+		$_SESSION = [];
+
+		// Second session: read data
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['username'] )->toBe( 'testuser' );
+		expect( $_SESSION['logged_in'] )->toBeTrue();
+
+		session_write_close();
+	} );
+
+	test( 'session_destroy removes session data', function() {
+		$session_id = 'integration_destroy_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['data'] = 'to_be_destroyed';
+		session_write_close();
+
+		// Destroy the session
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+		session_destroy();
+
+		// Verify data is gone from database
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+} );
+
+describe( 'Integration - read_and_close Option', function() {
+	test( 'session_start with read_and_close reads data and closes immediately', function() {
+		$session_id = 'integration_read_close_' . bin2hex( random_bytes( 8 ) );
+
+		// First: create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['value'] = 'readable';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Second: read with read_and_close
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		// Data should be available
+		expect( $_SESSION['value'] )->toBe( 'readable' );
+
+		// Session should already be closed
+		expect( session_status() )->toBe( PHP_SESSION_NONE );
+
+		// Lock should be released (verify by checking lock table)
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+
+	test( 'read_and_close does not save modifications', function() {
+		$session_id = 'integration_read_close_nosave_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['original'] = 'value';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Read with read_and_close and try to modify
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		// Modify $_SESSION (but session is already closed)
+		$_SESSION['original'] = 'modified';
+		$_SESSION['new_key'] = 'new_value';
+
+		$_SESSION = [];
+
+		// Verify original data is unchanged in database
+		$handler3 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler3, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['original'] )->toBe( 'value' );
+		expect( isset( $_SESSION['new_key'] ) )->toBeFalse();
+
+		session_write_close();
+	} );
+
+	test( 'read_and_close allows another session to acquire lock immediately', function() {
+		$session_id = 'integration_read_close_lock_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['data'] = 'test';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Open with read_and_close
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		// Immediately try to open same session normally (should not block)
+		$handler3 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler3, false );
+
+		// Need to reset session_id since previous session_start changed state
+		session_id( $session_id );
+
+		$start_time = microtime( true );
+		session_start();
+		$elapsed = microtime( true ) - $start_time;
+
+		// Should acquire lock almost immediately (not waiting for timeout)
+		expect( $elapsed )->toBeLessThan( 1.0 );
+		expect( $_SESSION['data'] )->toBe( 'test' );
+
+		session_write_close();
+	} );
+} );
+
+describe( 'Integration - Read-Only Handler Mode', function() {
+	test( 'read_only handler reads data without acquiring lock', function() {
+		$session_id = 'integration_readonly_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data using normal handler
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['user_id'] = 123;
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Read with read_only handler
+		$handler2 = Session::create( pdo: $this->pdo, read_only: true );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		// Data should be readable
+		expect( $_SESSION['user_id'] )->toBe( 123 );
+
+		// No lock should exist
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		session_write_close();
+	} );
+
+	test( 'read_only handler does not save session modifications', function() {
+		$session_id = 'integration_readonly_nosave_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['counter'] = 1;
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Modify with read_only handler
+		$handler2 = Session::create( pdo: $this->pdo, read_only: true );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		// Try to modify
+		$_SESSION['counter'] = 999;
+		$_SESSION['new_field'] = 'ignored';
+
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Verify original data unchanged
+		$handler3 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler3, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['counter'] )->toBe( 1 );
+		expect( isset( $_SESSION['new_field'] ) )->toBeFalse();
+
+		session_write_close();
+	} );
+
+	test( 'read_only handler allows concurrent access without blocking', function() {
+		$session_id = 'integration_readonly_concurrent_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with data
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['data'] = 'shared';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Open normal session (holds lock)
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		// Verify lock is held
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// read_only access should still work even though lock is held
+		// (because read_only doesn't try to acquire lock)
+		$handler3 = Session::create( pdo: $this->pdo, read_only: true );
+		$handler3->open( '', 'PHPSESSID' );
+
+		$start_time = microtime( true );
+		$data = $handler3->read( $session_id );
+		$elapsed = microtime( true ) - $start_time;
+
+		// Should read immediately without waiting
+		expect( $elapsed )->toBeLessThan( 0.5 );
+		expect( $data )->toContain( 'shared' );
+
+		$handler3->close();
+		session_write_close();
+	} );
+} );
+
+describe( 'Integration - Custom Session Name', function() {
+	test( 'session works with custom session name', function() {
+		$session_id = 'integration_custom_name_' . bin2hex( random_bytes( 8 ) );
+
+		$handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler, false );
+		session_name( 'MY_CUSTOM_SESSION' );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['app'] = 'custom_app';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Read back with same custom name
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_name( 'MY_CUSTOM_SESSION' );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['app'] )->toBe( 'custom_app' );
+
+		session_write_close();
+	} );
+} );
+
+describe( 'Integration - Fingerprint Protection', function() {
+	test( 'fingerprint protection works with session_start', function() {
+		$_SERVER['HTTP_USER_AGENT'] = 'Integration Test Browser';
+		$session_id = 'integration_fingerprint_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with fingerprint
+		$handler1 = Session::create(
+			pdo: $this->pdo,
+			lock_to_user_agent: true
+		);
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['secret'] = 'protected_value';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Read back with same User-Agent
+		$handler2 = Session::create(
+			pdo: $this->pdo,
+			lock_to_user_agent: true
+		);
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['secret'] )->toBe( 'protected_value' );
+
+		session_write_close();
+	} );
+
+	test( 'fingerprint mismatch invalidates session via session_start', function() {
+		$_SERVER['HTTP_USER_AGENT'] = 'Original Browser';
+		$session_id = 'integration_fingerprint_fail_' . bin2hex( random_bytes( 8 ) );
+
+		// Create session with fingerprint
+		$handler1 = Session::create(
+			pdo: $this->pdo,
+			lock_to_user_agent: true
+		);
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['secret'] = 'should_not_see_this';
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Change User-Agent (simulate hijacking)
+		$_SERVER['HTTP_USER_AGENT'] = 'Attacker Browser';
+
+		// Try to read with different User-Agent
+		$handler2 = Session::create(
+			pdo: $this->pdo,
+			lock_to_user_agent: true
+		);
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		// Session should be empty (invalidated)
+		expect( isset( $_SESSION['secret'] ) )->toBeFalse();
+
+		session_write_close();
+	} );
+} );
+
+describe( 'Integration - Session Regeneration', function() {
+	test( 'session_regenerate_id preserves data', function() {
+		$original_id = 'integration_regen_' . bin2hex( random_bytes( 8 ) );
+
+		$handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler, false );
+		session_id( $original_id );
+		session_start();
+
+		$_SESSION['user_id'] = 456;
+		$_SESSION['keep_this'] = 'preserved';
+
+		// Regenerate the session ID
+		session_regenerate_id( delete_old_session: true );
+		$new_id = session_id();
+
+		expect( $new_id )->not->toBe( $original_id );
+
+		// Data should still be present
+		expect( $_SESSION['user_id'] )->toBe( 456 );
+		expect( $_SESSION['keep_this'] )->toBe( 'preserved' );
+
+		session_write_close();
+
+		$_SESSION = [];
+
+		// Verify data persists with new ID
+		$handler2 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler2, false );
+		session_id( $new_id );
+		session_start();
+
+		expect( $_SESSION['user_id'] )->toBe( 456 );
+		expect( $_SESSION['keep_this'] )->toBe( 'preserved' );
+
+		session_write_close();
+
+		// Verify old session is gone
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM sessions WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $original_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+} );

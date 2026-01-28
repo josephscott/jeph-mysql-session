@@ -45,7 +45,8 @@ $session_handler = JEPH\MySQL\Session::create(
     lock_retry_interval: 100,         // Milliseconds between retries (default: 100)
     security_code: 'your_secret',     // Secret for fingerprint (default: '')
     lock_to_user_agent: true,         // Bind to User-Agent (default: false)
-    lock_to_ip: true                  // Bind to IP address (default: false)
+    lock_to_ip: true,                 // Bind to IP address (default: false)
+    read_only: false                  // Read-only mode, no locks/writes (default: false)
 );
 if ( $session_handler === false ) {
     die( 'Invalid configuration' );
@@ -64,6 +65,7 @@ The factory method returns `false` if table names contain invalid characters (on
 | security_code | `''` | Secret string for session fingerprint validation |
 | lock_to_user_agent | `false` | Bind session to the client's User-Agent header |
 | lock_to_ip | `false` | Bind session to client IP address (bool or callable) |
+| read_only | `false` | Open session in read-only mode (no locks, no writes) |
 
 ## Database Tables
 
@@ -204,6 +206,83 @@ session_write_close();
 
 The `refresh_lock()` method returns `true` if the lock was successfully refreshed, or `false` if no lock is held or the lock was lost. Call it at intervals shorter than `lock_max_age` (e.g., every `lock_max_age / 2` seconds).
 
+## Read-Only Mode
+
+Read-only mode allows you to access session data without acquiring locks and without saving any changes. This is useful for:
+
+- **High-traffic read-heavy pages** where you only need to check if a user is logged in
+- **AJAX endpoints** that read session data but don't modify it
+- **API endpoints** where session data is needed for authentication but not modified
+- **Reducing lock contention** when multiple requests need concurrent read access
+
+### Usage
+
+```php
+$session_handler = JEPH\MySQL\Session::create(
+    pdo: $pdo,
+    read_only: true
+);
+session_set_save_handler( session_handler: $session_handler, register_shutdown: true );
+session_start();
+
+// Read session data as normal
+$user_id = $_SESSION['user_id'] ?? null;
+
+// Any modifications to $_SESSION will NOT be saved
+$_SESSION['last_seen'] = time(); // This change is discarded
+```
+
+### Behavior
+
+When `read_only` is `true`:
+
+- **No lock is acquired** - Multiple read-only sessions can access the same session concurrently
+- **No data is written** - `write()` returns `true` but doesn't save changes
+- **No timestamp updates** - `updateTimestamp()` returns `true` but doesn't update
+- **Cannot create new sessions** - Writing to a non-existent session ID does nothing
+- **Fingerprint validation still works** - But mismatched fingerprints return empty data instead of destroying the session
+
+### Checking Read-Only Status
+
+Use `is_read_only()` to check if the session is in read-only mode:
+
+```php
+if ( $session_handler->is_read_only() ) {
+    // Don't try to save important data
+    log_warning( 'Attempted to modify session in read-only mode' );
+}
+```
+
+### Use Cases
+
+**Authentication check on API endpoint:**
+
+```php
+// API endpoint that just needs to verify the user is logged in
+$session_handler = JEPH\MySQL\Session::create( pdo: $pdo, read_only: true );
+session_set_save_handler( session_handler: $session_handler, register_shutdown: true );
+session_start();
+
+if ( empty( $_SESSION['user_id'] ) ) {
+    http_response_code( 401 );
+    exit( json_encode( ['error' => 'Unauthorized'] ) );
+}
+
+// Process the API request...
+```
+
+**High-traffic page with session check:**
+
+```php
+// Homepage that shows different content for logged-in users
+$session_handler = JEPH\MySQL\Session::create( pdo: $pdo, read_only: true );
+session_set_save_handler( session_handler: $session_handler, register_shutdown: true );
+session_start();
+
+$is_logged_in = ! empty( $_SESSION['user_id'] );
+// Render page with appropriate content...
+```
+
 ## Testing
 
 Tests are written using [Pest](https://pestphp.com/) and require a MySQL database.
@@ -243,3 +322,5 @@ The test suite includes:
 - **session-tests.php** - Basic session handler functionality (read, write, destroy, gc)
 - **locking-tests.php** - Lock acquisition, release, stale lock handling, and concurrent access tests
 - **fingerprint-tests.php** - Session hijacking protection via fingerprint validation
+- **read-only-tests.php** - Read-only mode functionality and behavior
+- **integration-tests.php** - Real PHP session integration (`session_start`, `read_and_close`, `session_regenerate_id`)

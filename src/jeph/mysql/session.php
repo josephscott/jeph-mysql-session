@@ -40,6 +40,8 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 	/** @var bool|callable */
 	private mixed $lock_to_ip;
 
+	private bool $read_only;
+
 	/**
 	 * Create a new Session handler instance.
 	 *
@@ -52,6 +54,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 	 * @param string $security_code Secret string for session fingerprint (hijacking protection)
 	 * @param bool $lock_to_user_agent Bind session to User-Agent header
 	 * @param bool|callable $lock_to_ip Bind session to IP address (true uses REMOTE_ADDR, callable for custom)
+	 * @param bool $read_only Open session in read-only mode (no locks, no writes)
 	 * @return self|false Returns false if validation fails
 	 */
 	public static function create(
@@ -63,7 +66,8 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		int $lock_retry_interval = 100,
 		string $security_code = '',
 		bool $lock_to_user_agent = false,
-		bool|callable $lock_to_ip = false
+		bool|callable $lock_to_ip = false,
+		bool $read_only = false
 	): self|false {
 		// Validate table names to prevent SQL injection
 		// Only allow alphanumeric characters and underscores
@@ -94,7 +98,8 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			lock_retry_interval: $lock_retry_interval,
 			security_code: $security_code,
 			lock_to_user_agent: $lock_to_user_agent,
-			lock_to_ip: $lock_to_ip
+			lock_to_ip: $lock_to_ip,
+			read_only: $read_only
 		);
 	}
 
@@ -107,7 +112,8 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		int $lock_retry_interval,
 		string $security_code,
 		bool $lock_to_user_agent,
-		bool|callable $lock_to_ip
+		bool|callable $lock_to_ip,
+		bool $read_only
 	) {
 		$this->pdo = $pdo;
 		$this->pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT );
@@ -119,6 +125,16 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$this->security_code = $security_code;
 		$this->lock_to_user_agent = $lock_to_user_agent;
 		$this->lock_to_ip = $lock_to_ip;
+		$this->read_only = $read_only;
+	}
+
+	/**
+	 * Check if the session is in read-only mode.
+	 *
+	 * @return bool True if session is read-only
+	 */
+	public function is_read_only(): bool {
+		return $this->read_only;
 	}
 
 	/**
@@ -212,6 +228,11 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		// Update only the timestamp without rewriting session data
 		// Called when session.lazy_write is enabled and data hasn't changed
 		// This is more efficient than a full write
+
+		// In read-only mode, don't update the timestamp
+		if ( $this->read_only ) {
+			return true;
+		}
 
 		// Check if we need to acquire a lock for this session ID
 		if ( $this->session_id !== $id ) {
@@ -377,12 +398,16 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 	}
 
 	public function read( string $id ): string|false {
-		// Only acquire lock if we don't already hold one for this session
-		// This handles session_reset() which re-reads the same session
-		if ( $this->session_id !== $id ) {
-			$lock_acquired = $this->acquire_lock( $id );
-			if ( $lock_acquired === false ) {
-				return false;
+		// In read-only mode, skip lock acquisition entirely
+		// This allows concurrent reads without blocking
+		if ( $this->read_only === false ) {
+			// Only acquire lock if we don't already hold one for this session
+			// This handles session_reset() which re-reads the same session
+			if ( $this->session_id !== $id ) {
+				$lock_acquired = $this->acquire_lock( $id );
+				if ( $lock_acquired === false ) {
+					return false;
+				}
 			}
 		}
 
@@ -407,6 +432,8 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		// Validate fingerprint if protection is enabled
+		// Note: In read-only mode, we still validate but won't destroy on mismatch
+		// since we can't write. Just return empty string.
 		if ( $this->fingerprint_enabled() ) {
 			$stored_fingerprint = $row['fingerprint'] ?? '';
 			$current_fingerprint = $this->calculate_fingerprint();
@@ -414,6 +441,10 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			// Use constant-time comparison to prevent timing attacks
 			if ( $stored_fingerprint === '' || hash_equals( $stored_fingerprint, $current_fingerprint ) === false ) {
 				// Fingerprint mismatch - possible session hijacking attempt
+				if ( $this->read_only ) {
+					// In read-only mode, just return empty string
+					return '';
+				}
 				// Destroy the session and return empty string to create a new one
 				$this->destroy( id: $id );
 				return '';
@@ -424,6 +455,12 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 	}
 
 	public function write( string $id, string $data ): bool {
+		// In read-only mode, don't write any changes
+		// Return true to indicate success (from PHP's perspective, the write "worked")
+		if ( $this->read_only ) {
+			return true;
+		}
+
 		// Check if we need to acquire a lock for this session ID
 		// This handles session_regenerate_id() which writes to a new ID
 		if ( $this->session_id !== $id ) {
