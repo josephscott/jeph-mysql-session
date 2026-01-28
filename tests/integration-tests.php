@@ -348,6 +348,366 @@ describe( 'Integration - Read-Only Handler Mode', function() {
 	} );
 } );
 
+describe( 'Integration - Read-Only to Read-Write Promotion', function() {
+	test( 'can promote from read_and_close to full read-write session', function() {
+		$session_id = 'integration_promote_' . bin2hex( random_bytes( 8 ) );
+
+		// Step 1: Create initial session with data (simulates previous login)
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['user_id'] = 123;
+		$_SESSION['username'] = 'testuser';
+		$_SESSION['login_count'] = 5;
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Step 2: Use read_and_close to quickly check session (e.g., auth check on API)
+		$ro_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $ro_handler, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		// Verify we can read the data
+		expect( $_SESSION['user_id'] )->toBe( 123 );
+		expect( $_SESSION['username'] )->toBe( 'testuser' );
+		expect( $_SESSION['login_count'] )->toBe( 5 );
+
+		// Session is already closed after read_and_close
+		expect( session_status() )->toBe( PHP_SESSION_NONE );
+
+		// Try to modify (won't be saved since session is closed)
+		$_SESSION['login_count'] = 999;
+
+		// Verify lock was released after read_and_close
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		$_SESSION = [];
+
+		// Step 3: Promote to full read-write session (user wants to perform action)
+		$rw_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $rw_handler, false );
+		session_id( $session_id );
+		session_start();
+
+		// Verify original data is intact (read_and_close changes were not saved)
+		expect( $_SESSION['user_id'] )->toBe( 123 );
+		expect( $_SESSION['username'] )->toBe( 'testuser' );
+		expect( $_SESSION['login_count'] )->toBe( 5 ); // Not 999
+
+		// Verify lock is now held
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		// Now make real modifications
+		$_SESSION['login_count'] = 6;
+		$_SESSION['last_action'] = 'promoted_session';
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Step 4: Verify modifications were saved using read_and_close
+		$verify_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $verify_handler, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['user_id'] )->toBe( 123 );
+		expect( $_SESSION['username'] )->toBe( 'testuser' );
+		expect( $_SESSION['login_count'] )->toBe( 6 ); // Updated
+		expect( $_SESSION['last_action'] )->toBe( 'promoted_session' ); // New field
+	} );
+
+	test( 'promotion pattern with read_and_close for conditional write', function() {
+		$session_id = 'integration_conditional_' . bin2hex( random_bytes( 8 ) );
+
+		// Setup: Create session with user data
+		$setup_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $setup_handler, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['user_id'] = 456;
+		$_SESSION['cart_items'] = 3;
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Scenario: API endpoint that reads session, then conditionally writes
+
+		// Phase 1: Quick read with read_and_close (no lingering lock)
+		$check_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $check_handler, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		$user_id = $_SESSION['user_id'] ?? null;
+		$cart_items = $_SESSION['cart_items'] ?? 0;
+
+		expect( $user_id )->toBe( 456 );
+		expect( $cart_items )->toBe( 3 );
+
+		// Session is already closed
+		expect( session_status() )->toBe( PHP_SESSION_NONE );
+
+		// Simulate: user wants to add item to cart (requires write)
+		$needs_write = true; // In real code: based on request
+
+		$_SESSION = [];
+
+		// Phase 2: If write needed, reopen with full access
+		if ( $needs_write ) {
+			$write_handler = Session::create( pdo: $this->pdo );
+			session_set_save_handler( $write_handler, false );
+			session_id( $session_id );
+			session_start();
+
+			// Verify data is still accessible
+			expect( $_SESSION['user_id'] )->toBe( 456 );
+			expect( $_SESSION['cart_items'] )->toBe( 3 );
+
+			// Perform the write operation
+			$_SESSION['cart_items'] = 4;
+
+			session_write_close();
+		}
+
+		$_SESSION = [];
+
+		// Verify the write succeeded using read_and_close
+		$final_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $final_handler, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['cart_items'] )->toBe( 4 );
+	} );
+
+	test( 'multiple read_and_close checks before promotion', function() {
+		$session_id = 'integration_multi_ro_' . bin2hex( random_bytes( 8 ) );
+
+		// Setup session
+		$setup = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $setup, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['visits'] = 0;
+		$_SESSION['user'] = 'visitor';
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Simulate multiple AJAX requests using read_and_close
+		for ( $i = 0; $i < 3; $i++ ) {
+			$ro = Session::create( pdo: $this->pdo );
+			session_set_save_handler( $ro, false );
+			session_id( $session_id );
+
+			session_start( [
+				'read_and_close' => true,
+			] );
+
+			// Each read_and_close request sees the same data
+			expect( $_SESSION['visits'] )->toBe( 0 );
+			expect( $_SESSION['user'] )->toBe( 'visitor' );
+
+			// Session automatically closed
+			expect( session_status() )->toBe( PHP_SESSION_NONE );
+
+			$_SESSION = [];
+		}
+
+		// Now user logs in - promote to write session
+		$login_handler = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $login_handler, false );
+		session_id( $session_id );
+		session_start();
+
+		$_SESSION['visits'] = 1;
+		$_SESSION['user'] = 'authenticated_user';
+		$_SESSION['logged_in_at'] = time();
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Subsequent read_and_close requests see updated data
+		$final_ro = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $final_ro, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['visits'] )->toBe( 1 );
+		expect( $_SESSION['user'] )->toBe( 'authenticated_user' );
+		expect( isset( $_SESSION['logged_in_at'] ) )->toBeTrue();
+	} );
+
+	test( 'read_and_close promotion does not interfere with other sessions', function() {
+		$session_a = 'integration_session_a_' . bin2hex( random_bytes( 8 ) );
+		$session_b = 'integration_session_b_' . bin2hex( random_bytes( 8 ) );
+
+		// Setup two different sessions
+		$setup_a = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $setup_a, false );
+		session_id( $session_a );
+		session_start();
+		$_SESSION['owner'] = 'user_a';
+		$_SESSION['value'] = 100;
+		session_write_close();
+		$_SESSION = [];
+
+		$setup_b = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $setup_b, false );
+		session_id( $session_b );
+		session_start();
+		$_SESSION['owner'] = 'user_b';
+		$_SESSION['value'] = 200;
+		session_write_close();
+		$_SESSION = [];
+
+		// read_and_close on session A
+		$ro_a = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $ro_a, false );
+		session_id( $session_a );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['owner'] )->toBe( 'user_a' );
+		expect( $_SESSION['value'] )->toBe( 100 );
+		$_SESSION = [];
+
+		// Promote session B to read-write
+		$rw_b = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $rw_b, false );
+		session_id( $session_b );
+		session_start();
+		$_SESSION['value'] = 250;
+		session_write_close();
+		$_SESSION = [];
+
+		// Verify session A is unchanged using read_and_close
+		$verify_a = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $verify_a, false );
+		session_id( $session_a );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['owner'] )->toBe( 'user_a' );
+		expect( $_SESSION['value'] )->toBe( 100 ); // Unchanged
+		$_SESSION = [];
+
+		// Verify session B was updated using read_and_close
+		$verify_b = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $verify_b, false );
+		session_id( $session_b );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['owner'] )->toBe( 'user_b' );
+		expect( $_SESSION['value'] )->toBe( 250 ); // Updated
+	} );
+
+	test( 'compare read_and_close vs read_only handler behavior', function() {
+		$session_id = 'integration_compare_' . bin2hex( random_bytes( 8 ) );
+
+		// Setup session
+		$setup = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $setup, false );
+		session_id( $session_id );
+		session_start();
+		$_SESSION['data'] = 'original';
+		session_write_close();
+		$_SESSION = [];
+
+		$stmt = $this->pdo->prepare( 'SELECT COUNT(*) as cnt FROM session_locks WHERE session_id = :session_id' );
+
+		// Test 1: read_and_close - acquires lock briefly, then releases
+		$handler1 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler1, false );
+		session_id( $session_id );
+
+		session_start( [
+			'read_and_close' => true,
+		] );
+
+		expect( $_SESSION['data'] )->toBe( 'original' );
+		expect( session_status() )->toBe( PHP_SESSION_NONE ); // Already closed
+
+		// Lock should be released
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		$_SESSION = [];
+
+		// Test 2: read_only handler - never acquires lock
+		$handler2 = Session::create( pdo: $this->pdo, read_only: true );
+		session_set_save_handler( $handler2, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['data'] )->toBe( 'original' );
+		expect( session_status() )->toBe( PHP_SESSION_ACTIVE ); // Still active
+
+		// Lock should never have been acquired
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+
+		session_write_close();
+		$_SESSION = [];
+
+		// Test 3: Normal session - holds lock until close
+		$handler3 = Session::create( pdo: $this->pdo );
+		session_set_save_handler( $handler3, false );
+		session_id( $session_id );
+		session_start();
+
+		expect( $_SESSION['data'] )->toBe( 'original' );
+		expect( session_status() )->toBe( PHP_SESSION_ACTIVE );
+
+		// Lock should be held
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 1 );
+
+		session_write_close();
+
+		// Lock released after close
+		$stmt->execute( [ ':session_id' => $session_id ] );
+		$row = $stmt->fetch( PDO::FETCH_ASSOC );
+		expect( (int) $row['cnt'] )->toBe( 0 );
+	} );
+} );
+
 describe( 'Integration - Custom Session Name', function() {
 	test( 'session works with custom session name', function() {
 		$session_id = 'integration_custom_name_' . bin2hex( random_bytes( 8 ) );
