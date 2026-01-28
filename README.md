@@ -38,11 +38,14 @@ All options are passed to the `create()` factory method, which returns `Session|
 ```php
 $session_handler = JEPH\MySQL\Session::create(
     pdo: $pdo,
-    table_name: 'sessions',        // Session data table (default: 'sessions')
+    table_name: 'sessions',           // Session data table (default: 'sessions')
     lock_table_name: 'session_locks', // Lock table (default: 'session_locks')
-    lock_timeout: 10,              // Seconds to wait for lock (default: 10)
-    lock_max_age: 30,              // Seconds before lock is stale (default: 30)
-    lock_retry_interval: 100       // Milliseconds between retries (default: 100)
+    lock_timeout: 10,                 // Seconds to wait for lock (default: 10)
+    lock_max_age: 30,                 // Seconds before lock is stale (default: 30)
+    lock_retry_interval: 100,         // Milliseconds between retries (default: 100)
+    security_code: 'your_secret',     // Secret for fingerprint (default: '')
+    lock_to_user_agent: true,         // Bind to User-Agent (default: false)
+    lock_to_ip: true                  // Bind to IP address (default: false)
 );
 if ( $session_handler === false ) {
     die( 'Invalid configuration' );
@@ -58,6 +61,9 @@ The factory method returns `false` if table names contain invalid characters (on
 | lock_timeout | `10` | Seconds to wait when acquiring a lock |
 | lock_max_age | `30` | Seconds before a lock is considered abandoned |
 | lock_retry_interval | `100` | Milliseconds between lock acquisition attempts |
+| security_code | `''` | Secret string for session fingerprint validation |
+| lock_to_user_agent | `false` | Bind session to the client's User-Agent header |
+| lock_to_ip | `false` | Bind session to client IP address (bool or callable) |
 
 ## Database Tables
 
@@ -88,6 +94,7 @@ Stores the actual session data.
 CREATE TABLE sessions (
     session_id VARCHAR(128) NOT NULL PRIMARY KEY,
     data MEDIUMBLOB NOT NULL,
+    fingerprint VARCHAR(64) NOT NULL DEFAULT '',
     last_accessed INT UNSIGNED NOT NULL,
     INDEX idx_last_accessed (last_accessed)
 ) ENGINE=InnoDB;
@@ -97,7 +104,68 @@ CREATE TABLE sessions (
 |--------|------|-------------|
 | session_id | VARCHAR(128) | The PHP session ID (primary key) |
 | data | MEDIUMBLOB | Serialized session data (up to 16MB) |
+| fingerprint | VARCHAR(64) | SHA256 hash for session hijacking protection |
 | last_accessed | INT UNSIGNED | Unix timestamp for garbage collection |
+
+## Session Hijacking Protection
+
+This handler provides optional session hijacking protection through fingerprint validation. When enabled, a hash of client characteristics is stored with the session and validated on each read. If the fingerprint doesn't match, the session is destroyed.
+
+### Configuration
+
+Enable protection by setting one or more of these options:
+
+```php
+$session_handler = JEPH\MySQL\Session::create(
+    pdo: $pdo,
+    security_code: 'a_random_secret_string_12chars',  // Server-side secret
+    lock_to_user_agent: true,                          // Bind to browser
+    lock_to_ip: true                                   // Bind to IP address
+);
+```
+
+### Options Explained
+
+**security_code** - A secret string (recommended: 12+ characters with mixed case and numbers) that is included in the fingerprint calculation. This adds server-side entropy that an attacker cannot know, making it harder to forge a valid fingerprint.
+
+**lock_to_user_agent** - When `true`, the session is bound to the client's User-Agent header. If the User-Agent changes, the session is invalidated. Note: Some browsers (especially older IE versions) may change User-Agent between requests, so test thoroughly.
+
+**lock_to_ip** - When `true`, the session is bound to `$_SERVER['REMOTE_ADDR']`. This provides strong protection but may cause issues for users whose IP changes frequently (mobile networks, some ISPs).
+
+### Using a Callable for IP Address
+
+If your application is behind a load balancer or reverse proxy, `REMOTE_ADDR` will be the proxy's IP. Use a callable to extract the real client IP:
+
+```php
+$session_handler = JEPH\MySQL\Session::create(
+    pdo: $pdo,
+    security_code: 'your_secret',
+    lock_to_ip: function(): string {
+        // Check trusted proxy headers
+        // WARNING: Only trust these headers if you control the proxy!
+        foreach ( ['HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'] as $header ) {
+            if ( isset( $_SERVER[$header] ) && $_SERVER[$header] !== '' ) {
+                // X-Forwarded-For may contain multiple IPs; take the first
+                $ip = explode( ',', $_SERVER[$header] )[0];
+                return trim( $ip );
+            }
+        }
+        return $_SERVER['REMOTE_ADDR'] ?? '';
+    }
+);
+```
+
+### Security Considerations
+
+- **Recommended**: Always set `security_code` when using fingerprint protection
+- **User-Agent binding** adds minor security; an attacker who steals a session cookie likely has the same browser
+- **IP binding** is stronger but may cause legitimate session loss for mobile users
+- A mismatched fingerprint destroys the session and returns empty data, forcing a new session
+- Uses `hash_equals()` for constant-time comparison to prevent timing attacks
+
+### Upgrading Existing Sessions
+
+If you enable fingerprint protection on an existing application, sessions created before the upgrade will be invalidated (they have no stored fingerprint). Users will need to log in again.
 
 ## Session Locking
 
@@ -174,3 +242,4 @@ make tests
 The test suite includes:
 - **session-tests.php** - Basic session handler functionality (read, write, destroy, gc)
 - **locking-tests.php** - Lock acquisition, release, stale lock handling, and concurrent access tests
+- **fingerprint-tests.php** - Session hijacking protection via fingerprint validation

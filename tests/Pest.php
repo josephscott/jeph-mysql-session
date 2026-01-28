@@ -53,6 +53,7 @@ function create_test_tables( PDO $pdo ): void {
 		CREATE TABLE IF NOT EXISTS sessions (
 			session_id VARCHAR(128) NOT NULL PRIMARY KEY,
 			data MEDIUMBLOB NOT NULL,
+			fingerprint VARCHAR(64) NOT NULL DEFAULT \'\',
 			last_accessed INT UNSIGNED NOT NULL,
 			INDEX idx_last_accessed (last_accessed)
 		) ENGINE=InnoDB

@@ -8,6 +8,9 @@ use SessionHandlerInterface;
 use SessionIdInterface;
 use SessionUpdateTimestampHandlerInterface;
 use function bin2hex;
+use function hash;
+use function hash_equals;
+use function is_callable;
 use function preg_match;
 use function random_bytes;
 use function time;
@@ -30,13 +33,37 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 
 	private int $lock_retry_interval;
 
+	private string $security_code;
+
+	private bool $lock_to_user_agent;
+
+	/** @var bool|callable */
+	private mixed $lock_to_ip;
+
+	/**
+	 * Create a new Session handler instance.
+	 *
+	 * @param PDO $pdo Database connection
+	 * @param string $table_name Session data table name
+	 * @param string $lock_table_name Lock table name
+	 * @param int $lock_timeout Seconds to wait for lock acquisition
+	 * @param int $lock_max_age Seconds before a lock is considered stale
+	 * @param int $lock_retry_interval Milliseconds between lock retry attempts
+	 * @param string $security_code Secret string for session fingerprint (hijacking protection)
+	 * @param bool $lock_to_user_agent Bind session to User-Agent header
+	 * @param bool|callable $lock_to_ip Bind session to IP address (true uses REMOTE_ADDR, callable for custom)
+	 * @return self|false Returns false if validation fails
+	 */
 	public static function create(
 		PDO $pdo,
 		string $table_name = 'sessions',
 		string $lock_table_name = 'session_locks',
 		int $lock_timeout = 10,
 		int $lock_max_age = 30,
-		int $lock_retry_interval = 100
+		int $lock_retry_interval = 100,
+		string $security_code = '',
+		bool $lock_to_user_agent = false,
+		bool|callable $lock_to_ip = false
 	): self|false {
 		// Validate table names to prevent SQL injection
 		// Only allow alphanumeric characters and underscores
@@ -64,7 +91,10 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 			lock_table_name: $lock_table_name,
 			lock_timeout: $lock_timeout,
 			lock_max_age: $lock_max_age,
-			lock_retry_interval: $lock_retry_interval
+			lock_retry_interval: $lock_retry_interval,
+			security_code: $security_code,
+			lock_to_user_agent: $lock_to_user_agent,
+			lock_to_ip: $lock_to_ip
 		);
 	}
 
@@ -74,7 +104,10 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		string $lock_table_name,
 		int $lock_timeout,
 		int $lock_max_age,
-		int $lock_retry_interval
+		int $lock_retry_interval,
+		string $security_code,
+		bool $lock_to_user_agent,
+		bool|callable $lock_to_ip
 	) {
 		$this->pdo = $pdo;
 		$this->pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT );
@@ -83,6 +116,53 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$this->lock_timeout = $lock_timeout;
 		$this->lock_max_age = $lock_max_age;
 		$this->lock_retry_interval = $lock_retry_interval;
+		$this->security_code = $security_code;
+		$this->lock_to_user_agent = $lock_to_user_agent;
+		$this->lock_to_ip = $lock_to_ip;
+	}
+
+	/**
+	 * Check if fingerprint protection is enabled.
+	 *
+	 * @return bool True if any fingerprint option is configured
+	 */
+	private function fingerprint_enabled(): bool {
+		return $this->security_code !== '' || $this->lock_to_user_agent || $this->lock_to_ip !== false;
+	}
+
+	/**
+	 * Calculate the session fingerprint hash.
+	 *
+	 * The fingerprint combines:
+	 * - User-Agent header (if lock_to_user_agent is true)
+	 * - Client IP address (if lock_to_ip is true or callable)
+	 * - Security code (always included if set)
+	 *
+	 * @return string SHA256 hash of the fingerprint components
+	 */
+	private function calculate_fingerprint(): string {
+		$components = '';
+
+		// Add User-Agent if configured
+		if ( $this->lock_to_user_agent ) {
+			$components .= $_SERVER['HTTP_USER_AGENT'] ?? '';
+		}
+
+		// Add IP address if configured
+		if ( $this->lock_to_ip !== false ) {
+			if ( is_callable( $this->lock_to_ip ) ) {
+				// Use callable to get IP (useful for reverse proxies)
+				$components .= ( $this->lock_to_ip )();
+			} else {
+				// Use REMOTE_ADDR directly
+				$components .= $_SERVER['REMOTE_ADDR'] ?? '';
+			}
+		}
+
+		// Always add security code
+		$components .= $this->security_code;
+
+		return hash( algo: 'sha256', data: $components );
 	}
 
 	private static function is_valid_table_name( string $name ): bool {
@@ -307,7 +387,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		$stmt = $this->pdo->prepare(
-			"SELECT data FROM `{$this->table_name}` WHERE session_id = :session_id"
+			"SELECT data, fingerprint FROM `{$this->table_name}` WHERE session_id = :session_id"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -324,6 +404,20 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		if ( $row === false ) {
 			// No existing session, return empty string (not an error)
 			return '';
+		}
+
+		// Validate fingerprint if protection is enabled
+		if ( $this->fingerprint_enabled() ) {
+			$stored_fingerprint = $row['fingerprint'] ?? '';
+			$current_fingerprint = $this->calculate_fingerprint();
+
+			// Use constant-time comparison to prevent timing attacks
+			if ( $stored_fingerprint === '' || hash_equals( $stored_fingerprint, $current_fingerprint ) === false ) {
+				// Fingerprint mismatch - possible session hijacking attempt
+				// Destroy the session and return empty string to create a new one
+				$this->destroy( id: $id );
+				return '';
+			}
 		}
 
 		return $row['data'];
@@ -344,9 +438,10 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		}
 
 		$now = time();
+		$fingerprint = $this->fingerprint_enabled() ? $this->calculate_fingerprint() : '';
 
 		$stmt = $this->pdo->prepare(
-			"INSERT INTO `{$this->table_name}` (session_id, data, last_accessed) VALUES (:session_id, :data, :last_accessed) ON DUPLICATE KEY UPDATE data = :data_update, last_accessed = :last_accessed_update"
+			"INSERT INTO `{$this->table_name}` (session_id, data, fingerprint, last_accessed) VALUES (:session_id, :data, :fingerprint, :last_accessed) ON DUPLICATE KEY UPDATE data = :data_update, last_accessed = :last_accessed_update"
 		);
 		if ( $stmt === false ) {
 			return false;
@@ -355,6 +450,7 @@ class Session implements SessionHandlerInterface, SessionIdInterface, SessionUpd
 		$result = $stmt->execute( [
 			':session_id' => $id,
 			':data' => $data,
+			':fingerprint' => $fingerprint,
 			':last_accessed' => $now,
 			':data_update' => $data,
 			':last_accessed_update' => $now,
