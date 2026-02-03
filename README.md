@@ -1,4 +1,4 @@
-# JEPH/Framework/MySQL/Session
+# JEPH\MySQL\Session
 
 [![Tests](https://github.com/josephscott/jeph-mysql-session/actions/workflows/tests.yml/badge.svg)](https://github.com/josephscott/jeph-mysql-session/actions/workflows/tests.yml)
 
