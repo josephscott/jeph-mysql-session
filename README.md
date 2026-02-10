@@ -95,7 +95,7 @@ Stores the actual session data.
 ```sql
 CREATE TABLE sessions (
     session_id VARCHAR(128) NOT NULL PRIMARY KEY,
-    data MEDIUMBLOB NOT NULL,
+    data MEDIUMTEXT NOT NULL,
     fingerprint VARCHAR(64) NOT NULL DEFAULT '',
     last_accessed INT UNSIGNED NOT NULL,
     INDEX idx_last_accessed (last_accessed)
@@ -105,7 +105,7 @@ CREATE TABLE sessions (
 | Column | Type | Description |
 |--------|------|-------------|
 | session_id | VARCHAR(128) | The PHP session ID (primary key) |
-| data | MEDIUMBLOB | Serialized session data (up to 16MB) |
+| data | MEDIUMTEXT | Serialized session data (up to 16MB) |
 | fingerprint | VARCHAR(64) | SHA256 hash for session hijacking protection |
 | last_accessed | INT UNSIGNED | Unix timestamp for garbage collection |
 
